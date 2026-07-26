@@ -479,7 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const useArchive = document.getElementById('shorts-archive-check').checked;
                 
                 const archiveFlag = useArchive ? `--download-archive "${outDir}\\downloaded.txt"` : '';
-                cmd = `yt-dlp --js-runtimes node --sleep-requests 1.5 --extractor-args "youtube:player_client=default,web_embedded" --newline "${channel}" --match-filter "duration < ${maxDur}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\%(title)s - %(id)s.%(ext)s" ${archiveFlag}`;
+                cmd = `yt-dlp --js-runtimes node --sleep-requests 1.5 --extractor-args "youtube:player_client=android_vr,web_creator" --newline "${channel}" --match-filter "duration < ${maxDur}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\%(title)s - %(id)s.%(ext)s" ${archiveFlag}`;
                 break;
             }
 

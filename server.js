@@ -178,7 +178,7 @@ const server = http.createServer((req, res) => {
                         finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
                     } else if (!cookiesFlag && !finalCommand.includes('--extractor-args')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=ios,web_creator"');
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=android_vr,web_creator"');
                     }
                 }
 
