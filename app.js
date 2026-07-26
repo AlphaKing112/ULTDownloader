@@ -430,7 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const url = document.getElementById('quick-url').value.trim() || '<VIDEO_URL>';
                 const fmt = document.getElementById('quick-format').value;
                 let out = 'downloads/%(title)s_%(height)sp.%(ext)s';
-                cmd = `yt-dlp --js-runtimes node --newline -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
+                cmd = `yt-dlp --js-runtimes node --newline --no-part -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
                 break;
             }
 
@@ -1244,17 +1244,27 @@ document.addEventListener('DOMContentLoaded', () => {
                                 }
                                 if (data.done) {
                                     finishProgressBar(data.exitCode === 0);
-                                    // Auto-trigger browser download of the completed file
+                                    // Fetch file as blob immediately (avoids new request hitting sleeping server)
                                     if (data.exitCode === 0 && data.outputFile) {
-                                        const dlUrl = `/api/download-file?path=${encodeURIComponent(data.outputFile)}`;
                                         const fname = data.outputFile.split('/').pop();
-                                        logToConsole(`[Download Ready] Saving "${fname}" to your browser Downloads folder...`, 'success');
-                                        const a = document.createElement('a');
-                                        a.href = dlUrl;
-                                        a.download = fname;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        document.body.removeChild(a);
+                                        logToConsole(`[Download Ready] Fetching "${fname}" from server...`, 'success');
+                                        try {
+                                            const dlUrl = `/api/download-file?path=${encodeURIComponent(data.outputFile)}`;
+                                            const dlRes = await fetch(dlUrl);
+                                            if (!dlRes.ok) throw new Error(`Server responded ${dlRes.status}`);
+                                            const blob = await dlRes.blob();
+                                            const blobUrl = URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.href = blobUrl;
+                                            a.download = fname;
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            document.body.removeChild(a);
+                                            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                                            logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
+                                        } catch (dlErr) {
+                                            logToConsole(`[Error] Could not fetch file: ${dlErr.message}`, 'error');
+                                        }
                                     }
                                 }
                             } catch (e) {}
