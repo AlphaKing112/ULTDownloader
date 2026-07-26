@@ -170,6 +170,9 @@ const server = http.createServer((req, res) => {
 
                 let finalCommand = command;
                 if (finalCommand.includes('yt-dlp')) {
+                    if (!finalCommand.includes('--sleep-requests')) {
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --sleep-requests 1.5');
+                    }
                     if (!finalCommand.includes('--js-runtimes')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --js-runtimes node');
                     }
