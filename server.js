@@ -6,7 +6,12 @@ const { exec } = require('child_process');
 let PORT = parseInt(process.env.PORT, 10) || 3005;
 const PUBLIC_DIR = __dirname;
 
-function getCookiesFlag() {
+function getCookiesFlag(url = '') {
+    // ONLY apply YouTube cookies for YouTube links! (Prevents breaking Twitch, Kick, TikTok, etc.)
+    if (url && !url.toLowerCase().includes('youtube.com') && !url.toLowerCase().includes('youtu.be')) {
+        return '';
+    }
+
     const cookiesPath = path.join(__dirname, 'cookies.txt');
 
     if (process.env.YOUTUBE_COOKIES) {
@@ -30,12 +35,12 @@ function getCookiesFlag() {
     return '';
 }
 
-function getBaseYtdlpCmd() {
-    const cookiesFlag = getCookiesFlag();
+function getBaseYtdlpCmd(url = '') {
+    const cookiesFlag = getCookiesFlag(url);
     if (cookiesFlag) {
         return `yt-dlp${cookiesFlag} --js-runtimes node`;
     }
-    return `yt-dlp --js-runtimes node --extractor-args "youtube:player_client=ios,web"`;
+    return `yt-dlp --js-runtimes node`;
 }
 
 const MIME_TYPES = {
@@ -143,7 +148,7 @@ const server = http.createServer((req, res) => {
                 }
 
                 let finalCommand = command;
-                const cookiesFlag = getCookiesFlag();
+                const cookiesFlag = getCookiesFlag(command);
                 if (cookiesFlag && finalCommand.startsWith('yt-dlp')) {
                     // Remove conflicting extractor-args when cookies are active
                     finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
@@ -252,7 +257,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd()} -j --no-warnings "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd(url)} -j --no-warnings "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 20000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
@@ -308,7 +313,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Extracting In-Memory Transcript]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd()} --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd(url)} --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
                     const rawOutput = (stdout || '') + (stderr || '');
@@ -355,7 +360,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Title]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd()} --print title --no-warnings "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd(url)} --print title --no-warnings "${cleanUrl}"`;
                 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
