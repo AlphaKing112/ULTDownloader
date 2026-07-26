@@ -20,9 +20,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const backendStatusText = document.getElementById('backend-status-text');
 
     // Tags & Meta card
-    const extractedMetaCard = document.getElementById('extracted-meta-card');
-    const tagsCloudContainer = document.getElementById('tags-cloud-container');
-    const descriptionBoxContainer = document.getElementById('description-box-container');
+    const extractedMetaCard = document.getElementById('extracted-results-card');
+    const tagsCloudContainer = document.getElementById('results-video-tags-cloud');
+    const descriptionBoxContainer = document.getElementById('results-text-box');
 
     // Thumbnail preview
     const thumbnailPreviewCard = document.getElementById('thumbnail-preview-card');
@@ -1383,20 +1383,36 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderTagCloud(tagsArr, descText) {
-        tagsCloudContainer.innerHTML = '';
-        tagsArr.forEach(tag => {
-            const pill = document.createElement('span');
-            pill.className = 'tag-pill';
-            pill.textContent = `#${tag}`;
-            pill.onclick = () => {
-                navigator.clipboard.writeText(tag);
-                logToConsole(`[Clipboard] Copied tag: #${tag}`, 'info');
-            };
-            tagsCloudContainer.appendChild(pill);
-        });
+        const videoTagsContainer = document.getElementById('results-video-tags-cloud') || tagsCloudContainer;
+        const descContainer = document.getElementById('results-text-box') || descriptionBoxContainer;
+        const metaCard = document.getElementById('extracted-results-card') || extractedMetaCard;
 
-        if (descText) {
-            descriptionBoxContainer.textContent = descText;
+        if (videoTagsContainer) {
+            videoTagsContainer.innerHTML = '';
+            if (Array.isArray(tagsArr) && tagsArr.length > 0) {
+                tagsArr.forEach(tag => {
+                    const pill = document.createElement('span');
+                    pill.className = 'tag-pill';
+                    pill.textContent = `#${tag}`;
+                    pill.onclick = () => {
+                        if (navigator.clipboard) {
+                            navigator.clipboard.writeText(tag);
+                        }
+                        logToConsole(`[Clipboard] Copied tag: #${tag}`, 'info');
+                    };
+                    videoTagsContainer.appendChild(pill);
+                });
+            } else {
+                videoTagsContainer.innerHTML = '<span class="text-muted" style="color:var(--text-muted);font-size:0.85rem;">No video tags extracted</span>';
+            }
+        }
+
+        if (descContainer && descText) {
+            descContainer.textContent = descText;
+        }
+
+        if (metaCard) {
+            metaCard.classList.remove('hidden');
         }
     }
 
