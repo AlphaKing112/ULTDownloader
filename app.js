@@ -1244,27 +1244,27 @@ document.addEventListener('DOMContentLoaded', () => {
                                 }
                                 if (data.done) {
                                     finishProgressBar(data.exitCode === 0);
-                                    // Fetch file as blob immediately (avoids new request hitting sleeping server)
-                                    if (data.exitCode === 0 && data.outputFile) {
-                                        const fname = data.outputFile.split('/').pop();
-                                        logToConsole(`[Download Ready] Fetching "${fname}" from server...`, 'success');
-                                        try {
-                                            const dlUrl = `/api/download-file?path=${encodeURIComponent(data.outputFile)}`;
-                                            const dlRes = await fetch(dlUrl);
-                                            if (!dlRes.ok) throw new Error(`Server responded ${dlRes.status}`);
-                                            const blob = await dlRes.blob();
-                                            const blobUrl = URL.createObjectURL(blob);
-                                            const a = document.createElement('a');
-                                            a.href = blobUrl;
-                                            a.download = fname;
-                                            document.body.appendChild(a);
-                                            a.click();
-                                            document.body.removeChild(a);
-                                            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                                            logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
-                                        } catch (dlErr) {
-                                            logToConsole(`[Error] Could not fetch file: ${dlErr.message}`, 'error');
-                                        }
+                                }
+                                // Server sends downloadToken after done — use token (avoids URL encoding issues)
+                                if (data.downloadToken && data.fileName) {
+                                    const fname = data.fileName;
+                                    logToConsole(`[Download Ready] Saving "${fname}" to your Downloads folder...`, 'success');
+                                    try {
+                                        const dlUrl = `/api/download-file?token=${data.downloadToken}`;
+                                        const dlRes = await fetch(dlUrl);
+                                        if (!dlRes.ok) throw new Error(`Server responded ${dlRes.status}`);
+                                        const blob = await dlRes.blob();
+                                        const blobUrl = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = blobUrl;
+                                        a.download = fname;
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        document.body.removeChild(a);
+                                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                                        logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
+                                    } catch (dlErr) {
+                                        logToConsole(`[Error] Could not fetch file: ${dlErr.message}`, 'error');
                                     }
                                 }
                             } catch (e) {}
