@@ -363,7 +363,8 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             urlElem.addEventListener('input', handleUrlChange);
-            urlElem.addEventListener('change', handleUrlChange);
+            // NOTE: do NOT add 'change' listener — pasteClipboard fires both 'input' and 'change'
+            // which would trigger the debounce twice and log metadata twice
         }
 
         if (titleElem) {
@@ -385,8 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const inputElem = document.getElementById(inputId);
             if (inputElem) {
                 inputElem.value = text;
-                inputElem.dispatchEvent(new Event('input'));
-                inputElem.dispatchEvent(new Event('change'));
+                inputElem.dispatchEvent(new Event('input')); // triggers auto-fetch debounce once
                 logToConsole(`[Input] Pasted clipboard content into input: "${text.substring(0, 35)}..."`, 'info');
                 updateGeneratedCommand();
             }
