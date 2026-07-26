@@ -8,15 +8,25 @@ const PUBLIC_DIR = __dirname;
 
 function getCookiesFlag() {
     const cookiesPath = path.join(__dirname, 'cookies.txt');
-    if (fs.existsSync(cookiesPath)) {
-        return ` --cookies "${cookiesPath}"`;
-    }
+
     if (process.env.YOUTUBE_COOKIES) {
         try {
-            fs.writeFileSync(cookiesPath, process.env.YOUTUBE_COOKIES);
+            let cookieText = process.env.YOUTUBE_COOKIES;
+            if (cookieText.includes('\\n') && !cookieText.includes('\n')) {
+                cookieText = cookieText.replace(/\\n/g, '\n');
+            }
+            if (cookieText.includes('\\t')) {
+                cookieText = cookieText.replace(/\\t/g, '\t');
+            }
+            fs.writeFileSync(cookiesPath, cookieText);
             return ` --cookies "${cookiesPath}"`;
         } catch (e) {}
     }
+
+    if (fs.existsSync(cookiesPath)) {
+        return ` --cookies "${cookiesPath}"`;
+    }
+
     return '';
 }
 
