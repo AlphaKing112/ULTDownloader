@@ -1027,9 +1027,52 @@ document.addEventListener('DOMContentLoaded', () => {
         return val || '';
     }
 
+    let activeFileHandle = null;
+
     // --- Execution Handler ---
     actionBtn.addEventListener('click', async () => {
         if (isTaskRunning) return;
+        activeFileHandle = null;
+
+        const downloadTabs = ['tab-quick-download', 'tab-section-clipper', 'tab-silence-cutter', 'tab-file-converter', 'tab-multi-section', 'tab-shorts-harvest'];
+
+        // 1. Open Save As Folder Picker FIRST before initiating download process
+        if (downloadTabs.includes(activeTabId) && typeof window.showSaveFilePicker === 'function') {
+            let suggestedTitle = '';
+            if (activeTabId === 'tab-quick-download') suggestedTitle = document.getElementById('quick-title')?.value.trim();
+            else if (activeTabId === 'tab-section-clipper') suggestedTitle = document.getElementById('section-title')?.value.trim();
+            else if (activeTabId === 'tab-silence-cutter') suggestedTitle = document.getElementById('silence-title')?.value.trim();
+            else if (activeTabId === 'tab-file-converter') suggestedTitle = document.getElementById('convert-name')?.value.trim();
+
+            let ext = 'mp4';
+            if (activeTabId === 'tab-quick-download') {
+                const fmtVal = document.getElementById('quick-format')?.value || '';
+                if (fmtVal.includes('bestaudio') || fmtVal.includes('mp3')) ext = 'mp3';
+                else if (fmtVal.includes('m4a')) ext = 'm4a';
+            }
+
+            let suggestedName = suggestedTitle ? sanitizeFilename(suggestedTitle) : 'Video_Clip';
+            if (!suggestedName.toLowerCase().endsWith('.' + ext)) {
+                suggestedName += '.' + ext;
+            }
+
+            let mimeType = 'video/mp4';
+            if (ext === 'mp3') mimeType = 'audio/mpeg';
+            else if (ext === 'm4a') mimeType = 'audio/m4a';
+
+            try {
+                activeFileHandle = await window.showSaveFilePicker({
+                    suggestedName: suggestedName,
+                    types: [{
+                        description: `${ext.toUpperCase()} File`,
+                        accept: { [mimeType]: [`.${ext}`] }
+                    }]
+                });
+            } catch (err) {
+                logToConsole('[Cancelled] Save location not selected. Download process aborted.', 'info');
+                return; // User cancelled the Save As dialog — abort execution entirely
+            }
+        }
 
         let targetPath = getTargetOutputFileForCheck();
 
@@ -1245,16 +1288,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (data.percent !== null && data.percent !== undefined) {
                                     updateProgressBar(data.percent, data.speed, data.eta);
                                 }
-                                 if (data.done) {
+                                if (data.done) {
                                     finishProgressBar(data.exitCode === 0);
                                     // downloadToken + fileName come in the same done packet
                                     if (data.exitCode === 0 && data.downloadToken && data.fileName) {
                                         const fname = data.fileName;
-                                        const ext = fname.split('.').pop().toLowerCase();
-                                        logToConsole(`[Download Ready] Fetching "${fname}" from server...`, 'success');
+                                        logToConsole(`[Download Ready] Transferring file from server...`, 'success');
                                         try {
                                             const dlUrl = `/api/download-file?token=${data.downloadToken}`;
-                                            logToConsole(`[Debug] Fetching: ${dlUrl}`, 'system');
                                             const dlRes = await fetch(dlUrl);
                                             if (!dlRes.ok) {
                                                 const errText = await dlRes.text().catch(() => '');
@@ -1262,49 +1303,26 @@ document.addEventListener('DOMContentLoaded', () => {
                                             }
                                             const blob = await dlRes.blob();
 
-                                            // Try native Save As dialog (Chrome/Edge File System Access API)
-                                            if (window.showSaveFilePicker) {
-                                                try {
-                                                    const mimeTypes = {
-                                                        mp4: 'video/mp4', mp3: 'audio/mpeg',
-                                                        mkv: 'video/x-matroska', webm: 'video/webm',
-                                                        m4a: 'audio/m4a', wav: 'audio/wav'
-                                                    };
-                                                    const handle = await window.showSaveFilePicker({
-                                                        suggestedName: fname,
-                                                        types: [{
-                                                            description: 'Video / Audio File',
-                                                            accept: { [mimeTypes[ext] || 'application/octet-stream']: ['.' + ext] }
-                                                        }]
-                                                    });
-                                                    const writable = await handle.createWritable();
-                                                    await writable.write(blob);
-                                                    await writable.close();
-                                                    logToConsole(`[Saved] "${fname}" saved successfully!`, 'success');
-                                                } catch (pickerErr) {
-                                                    if (pickerErr.name === 'AbortError') {
-                                                        logToConsole('[Cancelled] Save dialog was cancelled.', 'system');
-                                                    } else {
-                                                        // Fallback to auto-download if picker fails
-                                                        const blobUrl = URL.createObjectURL(blob);
-                                                        const a = document.createElement('a');
-                                                        a.href = blobUrl; a.download = fname;
-                                                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                                                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                                                        logToConsole(`[Saved] "${fname}" saved to Downloads folder!`, 'success');
-                                                    }
-                                                }
+                                            if (activeFileHandle) {
+                                                logToConsole(`[Saved] Writing directly to selected file: "${activeFileHandle.name}"...`, 'success');
+                                                const writable = await activeFileHandle.createWritable();
+                                                await writable.write(blob);
+                                                await writable.close();
+                                                logToConsole(`[Saved] Successfully saved file to: "${activeFileHandle.name}"!`, 'success');
+                                                activeFileHandle = null;
                                             } else {
-                                                // Fallback: auto-download for Firefox / Safari
                                                 const blobUrl = URL.createObjectURL(blob);
                                                 const a = document.createElement('a');
-                                                a.href = blobUrl; a.download = fname;
-                                                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                                                a.href = blobUrl;
+                                                a.download = fname;
+                                                document.body.appendChild(a);
+                                                a.click();
+                                                document.body.removeChild(a);
                                                 setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                                                logToConsole(`[Saved] "${fname}" saved to Downloads folder!`, 'success');
+                                                logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
                                             }
                                         } catch (dlErr) {
-                                            logToConsole(`[Error] Could not fetch file: ${dlErr.message}`, 'error');
+                                            logToConsole(`[Error] Could not save file: ${dlErr.message}`, 'error');
                                         }
                                     } else if (data.exitCode === 0 && !data.downloadToken) {
                                         logToConsole('[Warning] Download completed but no file token received from server.', 'system');
