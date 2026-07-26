@@ -6,6 +6,20 @@ const { exec } = require('child_process');
 let PORT = parseInt(process.env.PORT, 10) || 3005;
 const PUBLIC_DIR = __dirname;
 
+function getCookiesFlag() {
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+        return ` --cookies "${cookiesPath}"`;
+    }
+    if (process.env.YOUTUBE_COOKIES) {
+        try {
+            fs.writeFileSync(cookiesPath, process.env.YOUTUBE_COOKIES);
+            return ` --cookies "${cookiesPath}"`;
+        } catch (e) {}
+    }
+    return '';
+}
+
 const MIME_TYPES = {
     '.html': 'text/html',
     '.css': 'text/css',
@@ -110,7 +124,13 @@ const server = http.createServer((req, res) => {
                     return res.end(JSON.stringify({ error: 'Command required' }));
                 }
 
-                console.log(`[Server Executing Command Stream]: ${command}`);
+                let finalCommand = command;
+                const cookiesFlag = getCookiesFlag();
+                if (cookiesFlag && finalCommand.startsWith('yt-dlp')) {
+                    finalCommand = finalCommand.replace(/^yt-dlp/, `yt-dlp${cookiesFlag}`);
+                }
+
+                console.log(`[Server Executing Command Stream]: ${finalCommand}`);
 
                 res.writeHead(200, {
                     'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -212,7 +232,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" -j --no-warnings "${cleanUrl}"`;
+                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" -j --no-warnings "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 20000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
@@ -268,7 +288,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Extracting In-Memory Transcript]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
+                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
                     const rawOutput = (stdout || '') + (stderr || '');
@@ -315,7 +335,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Title]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" --print title --no-warnings "${cleanUrl}"`;
+                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" --print title --no-warnings "${cleanUrl}"`;
                 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
