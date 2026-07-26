@@ -20,6 +20,14 @@ function getCookiesFlag() {
     return '';
 }
 
+function getBaseYtdlpCmd() {
+    const cookiesFlag = getCookiesFlag();
+    if (cookiesFlag) {
+        return `yt-dlp${cookiesFlag} --js-runtimes node`;
+    }
+    return `yt-dlp --js-runtimes node --extractor-args "youtube:player_client=ios,web"`;
+}
+
 const MIME_TYPES = {
     '.html': 'text/html',
     '.css': 'text/css',
@@ -127,6 +135,8 @@ const server = http.createServer((req, res) => {
                 let finalCommand = command;
                 const cookiesFlag = getCookiesFlag();
                 if (cookiesFlag && finalCommand.startsWith('yt-dlp')) {
+                    // Remove conflicting extractor-args when cookies are active
+                    finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
                     finalCommand = finalCommand.replace(/^yt-dlp/, `yt-dlp${cookiesFlag}`);
                 }
 
@@ -232,7 +242,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=mweb,ios,android_vr,android" -j --no-warnings "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd()} -j --no-warnings "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 20000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
@@ -288,7 +298,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Extracting In-Memory Transcript]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=mweb,ios,android_vr,android" --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd()} --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
                     const rawOutput = (stdout || '') + (stderr || '');
@@ -335,7 +345,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Title]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=mweb,ios,android_vr,android" --print title --no-warnings "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd()} --print title --no-warnings "${cleanUrl}"`;
                 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
