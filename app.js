@@ -470,9 +470,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (url.toLowerCase().includes('kick.com/videos')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:-c:v libx264 -preset fast -crf 18 -c:a aac -b:a 160k -movflags +faststart -fflags +genpts -avoid_negative_ts make_zero" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:-c copy" -o "${out}" "${url}"`;
+                } else if (url.toLowerCase().includes('twitch.tv')) {
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:-c copy" -o "${out}" "${url}"`;
                 } else {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --force-keyframes-at-cuts -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:-c copy" -o "${out}" "${url}"`;
                 }
                 break;
             }

@@ -164,7 +164,7 @@ const server = http.createServer((req, res) => {
                     'Connection': 'keep-alive'
                 });
 
-                const child = exec(command, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
+                const child = exec(finalCommand, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
 
                 const handleOutput = (data, defaultType = 'info') => {
                     const text = data.toString();
@@ -175,8 +175,17 @@ const server = http.createServer((req, res) => {
                         if (!trimmed) return;
                         
                         let percentMatch = trimmed.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
-                        let speedMatch = trimmed.match(/at\s+([0-9\.]+\s*[KMGk]?i?B\/s)/i);
+                        let speedMatch = trimmed.match(/at\s+([0-9\.]+\s*[KMGk]?i?B\/s)/i) || trimmed.match(/speed=\s*([0-9\.]+\s*x)/i);
                         let etaMatch = trimmed.match(/ETA\s+([0-9:]+)/i);
+
+                        if (!percentMatch && trimmed.includes('frame=')) {
+                            let frameMatch = trimmed.match(/frame=\s*(\d+)/i);
+                            if (frameMatch) {
+                                let frameNum = parseInt(frameMatch[1], 10);
+                                let simPercent = Math.min(99, Math.floor((frameNum / 250) * 100));
+                                percentMatch = [null, simPercent.toString()];
+                            }
+                        }
 
                         let logType = defaultType;
                         if (trimmed.includes('[Ready]') || trimmed.includes('100%')) logType = 'success';
