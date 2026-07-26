@@ -440,8 +440,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const end = document.getElementById('section-end').value.trim() || '00:01:00';
                 const preset = document.getElementById('section-format-preset').value;
                 let out = 'downloads/%(title)s.mp4';
-                // -avoid_negative_ts make_zero + -fflags +genpts fixes freeze/stutter from keyframe misalignment
-                const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts';
+                // -movflags +faststart: moves MP4 index to front → Windows player can play immediately
+                // -avoid_negative_ts make_zero + -fflags +genpts: fixes keyframe timestamp misalignment
+                const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts -movflags +faststart';
 
                 if (url.toLowerCase().includes('kick.com/videos')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
