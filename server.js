@@ -162,14 +162,14 @@ const server = http.createServer((req, res) => {
                 }
 
                 let finalCommand = command;
-                if (finalCommand.startsWith('yt-dlp')) {
+                if (finalCommand.includes('yt-dlp')) {
                     if (!finalCommand.includes('--js-runtimes')) {
-                        finalCommand = finalCommand.replace(/^yt-dlp/, 'yt-dlp --js-runtimes node');
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --js-runtimes node');
                     }
                     const cookiesFlag = getCookiesFlag(command);
                     if (cookiesFlag && !finalCommand.includes('--cookies')) {
                         finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
-                        finalCommand = finalCommand.replace(/^yt-dlp/, `yt-dlp${cookiesFlag}`);
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
                     }
                 }
 

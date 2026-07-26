@@ -479,7 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const useArchive = document.getElementById('shorts-archive-check').checked;
                 
                 const archiveFlag = useArchive ? `--download-archive "${outDir}\\downloaded.txt"` : '';
-                cmd = `yt-dlp --js-runtimes node --newline "${channel}" --match-filter "duration < ${maxDur}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\%(title)s - %(id)s.%(ext)s" ${archiveFlag}`;
+                cmd = `yt-dlp --js-runtimes node --sleep-requests 1.5 --extractor-args "youtube:player_client=default,web_embedded" --newline "${channel}" --match-filter "duration < ${maxDur}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\%(title)s - %(id)s.%(ext)s" ${archiveFlag}`;
                 break;
             }
 
@@ -846,6 +846,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function logToConsole(message, type = 'info', isProgress = false) {
         if (!message) return;
         
+        let effectiveType = type;
+        if (message.includes('Sign in to confirm you’re not a bot') || message.includes('Sign in to confirm you\'re not a bot') || message.includes('ERROR:')) {
+            effectiveType = 'error';
+        } else if (message.includes('WARNING:')) {
+            effectiveType = 'system';
+        }
+
         // Detect progress updates e.g. [download] 12% ...
         const isDownloadProgress = isProgress || message.startsWith('[download]');
         const lastLine = consoleOutput.lastElementChild;
@@ -857,7 +864,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             // Create new log line
             const line = document.createElement('div');
-            line.className = `log-line ${type}${isDownloadProgress ? ' progress-line' : ''}`;
+            line.className = `log-line ${effectiveType}${isDownloadProgress ? ' progress-line' : ''}`;
             
             const timestamp = new Date().toLocaleTimeString();
             line.innerHTML = `<span style="opacity: 0.6;">[${timestamp}]</span> <span>${escapeHtml(message)}</span>`;
