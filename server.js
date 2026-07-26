@@ -37,10 +37,11 @@ function getCookiesFlag(url = '') {
 
 function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
+    const lowMemFlags = '--http-chunk-size 10M --buffer-size 16k';
     if (cookiesFlag) {
-        return `yt-dlp${cookiesFlag} --js-runtimes node`;
+        return `yt-dlp${cookiesFlag} ${lowMemFlags} --js-runtimes node`;
     }
-    return `yt-dlp --js-runtimes node`;
+    return `yt-dlp ${lowMemFlags} --js-runtimes node`;
 }
 
 const MIME_TYPES = {

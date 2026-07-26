@@ -3,6 +3,8 @@ FROM node:20-bookworm-slim
 
 # Prevent debconf interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
+# Cap Node.js memory usage to 256MB to stay strictly under Render 512MB RAM free tier limit
+ENV NODE_OPTIONS="--max-old-space-size=256"
 
 # Install ffmpeg, python3, curl, and latest yt-dlp binary
 RUN apt-get update && apt-get install -y \
