@@ -440,14 +440,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const end = document.getElementById('section-end').value.trim() || '00:01:00';
                 const preset = document.getElementById('section-format-preset').value;
                 let out = 'downloads/%(title)s.mp4';
+                // -avoid_negative_ts make_zero + -fflags +genpts fixes freeze/stutter from keyframe misalignment
+                const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts';
 
                 if (url.toLowerCase().includes('kick.com/videos')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:-c copy" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else if (url.toLowerCase().includes('twitch.tv')) {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:-c copy" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:-c copy" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 }
                 break;
             }
