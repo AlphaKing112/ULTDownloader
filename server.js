@@ -274,7 +274,14 @@ const server = http.createServer((req, res) => {
             'Content-Disposition': `attachment; filename="${path.basename(absPath)}"`,
             'Content-Length': stat.size
         });
-        fs.createReadStream(absPath).pipe(res);
+        const stream = fs.createReadStream(absPath);
+        stream.pipe(res);
+        // Delete file from Render disk immediately after fully sent to browser
+        stream.on('end', () => {
+            fs.unlink(absPath, (err) => {
+                if (!err) console.log(`[Server] Deleted from disk after transfer: ${path.basename(absPath)}`);
+            });
+        });
         return;
     }
 
