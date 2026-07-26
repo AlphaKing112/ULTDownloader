@@ -37,11 +37,10 @@ function getCookiesFlag(url = '') {
 
 function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
-    const lowMemFlags = '--http-chunk-size 10M --buffer-size 16k';
     if (cookiesFlag) {
-        return `yt-dlp${cookiesFlag} ${lowMemFlags} --js-runtimes node`;
+        return `yt-dlp${cookiesFlag} --js-runtimes node`;
     }
-    return `yt-dlp ${lowMemFlags} --js-runtimes node`;
+    return `yt-dlp --js-runtimes node`;
 }
 
 const MIME_TYPES = {
@@ -271,9 +270,10 @@ const server = http.createServer((req, res) => {
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 20000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
-                        console.error(`[Server Metadata Fetch Error]: ${error ? error.message : 'No metadata returned'}`);
+                        const errDetail = (stderr || error?.message || 'No metadata returned').trim();
+                        console.error(`[Server Metadata Fetch Error]: ${errDetail}`);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        return res.end(JSON.stringify({ success: false, error: 'Could not fetch metadata' }));
+                        return res.end(JSON.stringify({ success: false, error: errDetail }));
                     }
                     try {
                         const info = JSON.parse(stdout.trim().split('\n')[0]);
@@ -374,9 +374,10 @@ const server = http.createServer((req, res) => {
                 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
-                        console.error(`[Server Fetch Title Error]: ${error ? error.message : 'No title returned'}`);
+                        const errDetail = (stderr || error?.message || 'No title returned').trim();
+                        console.error(`[Server Fetch Title Error]: ${errDetail}`);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        return res.end(JSON.stringify({ success: false, error: 'Could not fetch title from media link' }));
+                        return res.end(JSON.stringify({ success: false, error: errDetail }));
                     }
                     const title = stdout.trim().split(/[\r\n]+/)[0].trim();
                     console.log(`[Server Title Fetched]: "${title}"`);
