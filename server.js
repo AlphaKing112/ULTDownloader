@@ -336,14 +336,18 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Select Folder Endpoint (Opens Native Windows Folder Dialog Box)
+    // API Select Folder Endpoint (Opens Native Windows Folder Dialog Box on Windows)
     if (pathname === '/api/select-folder' && req.method === 'POST') {
+        if (process.platform !== 'win32') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, isCloud: true, error: 'Cloud server mode' }));
+        }
+
         console.log('[Server Opening Windows Folder Dialog...]');
         const psCommand = `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Output Destination Folder'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"`;
         
         exec(psCommand, { maxBuffer: 1024 * 1024 * 2, windowsHide: false, timeout: 60000 }, (error, stdout, stderr) => {
             if (error || !stdout || !stdout.trim()) {
-                console.log(`[Server Folder Dialog Canceled or Error]: ${error ? error.message : 'No folder selected'}`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ success: false, error: 'Folder selection canceled or unavailable' }));
             }
