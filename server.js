@@ -49,10 +49,11 @@ function getCookiesFlag(url = '') {
 
 function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
+    const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate chrome' : '';
     if (cookiesFlag) {
-        return `yt-dlp${cookiesFlag} --js-runtimes node`;
+        return `yt-dlp${cookiesFlag}${impersonateFlag} --js-runtimes node`;
     }
-    return `yt-dlp --js-runtimes node`;
+    return `yt-dlp${impersonateFlag} --js-runtimes node`;
 }
 
 const MIME_TYPES = {
@@ -170,6 +171,9 @@ const server = http.createServer((req, res) => {
 
                 let finalCommand = command;
                 if (finalCommand.includes('yt-dlp')) {
+                    if (!finalCommand.includes('--impersonate') && finalCommand.toLowerCase().includes('kick.com')) {
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --impersonate chrome');
+                    }
                     if (!finalCommand.includes('--sleep-requests')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --sleep-requests 1.5');
                     }

@@ -430,7 +430,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const url = document.getElementById('quick-url').value.trim() || '<VIDEO_URL>';
                 const fmt = document.getElementById('quick-format').value;
                 let out = 'downloads/%(title)s_%(height)sp.%(ext)s';
-                cmd = `yt-dlp --js-runtimes node --newline --no-part -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
+                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate chrome' : '';
+                cmd = `yt-dlp${impersonate} --js-runtimes node --newline --no-part -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
                 break;
             }
 
@@ -443,10 +444,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 // -movflags +faststart: moves MP4 index to front → Windows player can play immediately
                 // -avoid_negative_ts make_zero + -fflags +genpts: fixes keyframe timestamp misalignment
                 const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts -movflags +faststart';
+                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate chrome' : '';
 
-                if (url.toLowerCase().includes('kick.com/videos')) {
+                if (url.toLowerCase().includes('kick.com')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else if (url.toLowerCase().includes('twitch.tv')) {
                     cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else {
