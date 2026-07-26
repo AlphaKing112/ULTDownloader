@@ -110,29 +110,8 @@ const server = http.createServer((req, res) => {
 </urlset>`);
     }
 
-    // API Direct File Download Endpoint (For Cloud Deployment)
-    if (pathname.startsWith('/api/download-file')) {
-        const fileParam = parsedUrl.searchParams.get('file');
-        if (!fileParam) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'file param required' }));
-        }
 
-        const safeFilename = path.basename(fileParam);
-        const targetPath = path.join(PUBLIC_DIR, 'downloads', safeFilename);
 
-        if (fs.existsSync(targetPath)) {
-            res.writeHead(200, {
-                'Content-Type': 'application/octet-stream',
-                'Content-Disposition': `attachment; filename="${safeFilename}"`
-            });
-            fs.createReadStream(targetPath).pipe(res);
-        } else {
-            res.writeHead(404, { 'Content-Type': 'text/html' });
-            res.end('<h1>404 File Not Found</h1>');
-        }
-        return;
-    }
 
     // API Health Check
     if (pathname === '/api/health') {
