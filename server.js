@@ -162,11 +162,15 @@ const server = http.createServer((req, res) => {
                 }
 
                 let finalCommand = command;
-                const cookiesFlag = getCookiesFlag(command);
-                if (cookiesFlag && finalCommand.startsWith('yt-dlp')) {
-                    // Remove conflicting extractor-args when cookies are active
-                    finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
-                    finalCommand = finalCommand.replace(/^yt-dlp/, `yt-dlp${cookiesFlag}`);
+                if (finalCommand.startsWith('yt-dlp')) {
+                    if (!finalCommand.includes('--js-runtimes')) {
+                        finalCommand = finalCommand.replace(/^yt-dlp/, 'yt-dlp --js-runtimes node');
+                    }
+                    const cookiesFlag = getCookiesFlag(command);
+                    if (cookiesFlag && !finalCommand.includes('--cookies')) {
+                        finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
+                        finalCommand = finalCommand.replace(/^yt-dlp/, `yt-dlp${cookiesFlag}`);
+                    }
                 }
 
                 console.log(`[Server Executing Command Stream]: ${finalCommand}`);
