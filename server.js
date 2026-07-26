@@ -49,7 +49,7 @@ function getCookiesFlag(url = '') {
 
 function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
-    const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate chrome' : '';
+    const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate Chrome' : '';
     if (cookiesFlag) {
         return `yt-dlp${cookiesFlag}${impersonateFlag} --js-runtimes node`;
     }
@@ -100,17 +100,16 @@ const server = http.createServer((req, res) => {
     // SEO Robots.txt for Google Indexing
     if (pathname === '/robots.txt') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        return res.end(`User-agent: *\nAllow: /\nSitemap: https://${req.headers.host || 'localhost'}/sitemap.xml\n`);
+        return res.end("User-agent: *\nAllow: /\nSitemap: https://ultdownloader.onrender.com/sitemap.xml");
     }
 
-    // SEO Sitemap.xml for Google Crawling
+    // Dynamic SEO XML Sitemap
     if (pathname === '/sitemap.xml') {
         res.writeHead(200, { 'Content-Type': 'application/xml' });
-        const host = req.headers.host || 'localhost';
         return res.end(`<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://${host}/</loc>
+    <loc>https://ultdownloader.onrender.com/</loc>
     <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
@@ -118,36 +117,38 @@ const server = http.createServer((req, res) => {
 </urlset>`);
     }
 
-
-
-
-    // API Health Check
-    if (pathname === '/api/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ status: 'ok', server: 'ULTDownloader Backend', uptime: process.uptime() }));
-    }
-
-    // API Disk Inspector Endpoint
-    if (pathname === '/api/disk') {
+    // API Downloads List
+    if (pathname === '/api/downloads' && req.method === 'GET') {
         try {
             const downloadsDir = path.join(__dirname, 'downloads');
+            if (!fs.existsSync(downloadsDir)) {
+                fs.mkdirSync(downloadsDir, { recursive: true });
+            }
+
             const files = [];
-            function scanDir(dir) {
-                if (!fs.existsSync(dir)) return;
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                entries.forEach(e => {
-                    const full = path.join(dir, e.name);
-                    if (e.isDirectory()) scanDir(full);
-                    else {
-                        const stat = fs.statSync(full);
+
+            const scanDir = (dirPath) => {
+                const items = fs.readdirSync(dirPath, { withFileTypes: true });
+                for (const item of items) {
+                    const fullPath = path.join(dirPath, item.name);
+                    if (item.isDirectory()) {
+                        scanDir(fullPath);
+                    } else if (item.isFile()) {
+                        if (item.name.endsWith('.part') || item.name.endsWith('.ytdl') || item.name.startsWith('.')) continue;
+
+                        const stats = fs.statSync(fullPath);
+                        const relPath = path.relative(downloadsDir, fullPath).replace(/\\/g, '/');
+
                         files.push({
-                            file: full.replace(__dirname + path.sep, '').replace(/\\/g, '/'),
-                            size: `${(stat.size / 1024 / 1024).toFixed(2)} MB`,
-                            modified: new Date(stat.mtimeMs).toISOString()
+                            name: item.name,
+                            relPath: relPath,
+                            size: stats.size,
+                            mtime: stats.mtimeMs
                         });
                     }
-                });
-            }
+                }
+            };
+
             scanDir(downloadsDir);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ totalFiles: files.length, files }, null, 2));
@@ -155,6 +156,12 @@ const server = http.createServer((req, res) => {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: e.message }));
         }
+    }
+
+    // API Health Check
+    if (pathname === '/api/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'ok', server: 'ULTDownloader Backend', uptime: process.uptime() }));
     }
 
     // API Command Execution Endpoint (Chunked Real-Time Progress Stream)
@@ -172,7 +179,7 @@ const server = http.createServer((req, res) => {
                 let finalCommand = command;
                 if (finalCommand.includes('yt-dlp')) {
                     if (!finalCommand.includes('--impersonate') && finalCommand.toLowerCase().includes('kick.com')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --impersonate chrome');
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --impersonate Chrome');
                     }
                     if (!finalCommand.includes('--sleep-requests')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --sleep-requests 1.5');

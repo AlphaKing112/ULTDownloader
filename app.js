@@ -430,7 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const url = document.getElementById('quick-url').value.trim() || '<VIDEO_URL>';
                 const fmt = document.getElementById('quick-format').value;
                 let out = 'downloads/%(title)s_%(height)sp.%(ext)s';
-                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate chrome' : '';
+                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
                 cmd = `yt-dlp${impersonate} --js-runtimes node --newline --no-part -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
                 break;
             }
@@ -444,7 +444,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // -movflags +faststart: moves MP4 index to front → Windows player can play immediately
                 // -avoid_negative_ts make_zero + -fflags +genpts: fixes keyframe timestamp misalignment
                 const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts -movflags +faststart';
-                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate chrome' : '';
+                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
 
                 if (url.toLowerCase().includes('kick.com')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
