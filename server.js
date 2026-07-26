@@ -132,7 +132,37 @@ const server = http.createServer((req, res) => {
     // API Health Check
     if (pathname === '/api/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ status: 'ok', server: 'Clip Vault Studio Backend', uptime: process.uptime() }));
+        return res.end(JSON.stringify({ status: 'ok', server: 'ULTDownloader Backend', uptime: process.uptime() }));
+    }
+
+    // API Disk Inspector Endpoint
+    if (pathname === '/api/disk') {
+        try {
+            const downloadsDir = path.join(__dirname, 'downloads');
+            const files = [];
+            function scanDir(dir) {
+                if (!fs.existsSync(dir)) return;
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                entries.forEach(e => {
+                    const full = path.join(dir, e.name);
+                    if (e.isDirectory()) scanDir(full);
+                    else {
+                        const stat = fs.statSync(full);
+                        files.push({
+                            file: full.replace(__dirname + path.sep, '').replace(/\\/g, '/'),
+                            size: `${(stat.size / 1024 / 1024).toFixed(2)} MB`,
+                            modified: new Date(stat.mtimeMs).toISOString()
+                        });
+                    }
+                });
+            }
+            scanDir(downloadsDir);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ totalFiles: files.length, files }, null, 2));
+        } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message }));
+        }
     }
 
     // API Command Execution Endpoint (Chunked Real-Time Progress Stream)
