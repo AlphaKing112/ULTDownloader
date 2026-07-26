@@ -1,5 +1,5 @@
-# Use official Node.js runtime as parent image
-FROM node:18-bullseye-slim
+# Use official Node.js runtime with Debian Bookworm (Python 3.11+)
+FROM node:20-bookworm-slim
 
 # Prevent debconf interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
