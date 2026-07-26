@@ -693,13 +693,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (playerSelector) playerSelector.value = targetMode;
             if (playerIcon) playerIcon.className = 'fa-brands fa-twitch player-icon twitch';
 
-            if (playerContainer) {
-                playerContainer.innerHTML = `<div id="twitch-player-target" style="width:100%;height:100%;"></div>`;
-            }
-            await loadTwitchEmbedApi();
-
             if (vodMatch && vodMatch[1]) {
                 const vodId = vodMatch[1];
+                if (playerContainer) {
+                    playerContainer.innerHTML = `<div id="twitch-player-target" style="width:100%;height:100%;"></div>`;
+                }
+                await loadTwitchEmbedApi();
                 if (playerTitle) playerTitle.textContent = `Twitch VOD Player (ID: ${vodId})`;
                 twitchPlayerInstance = new Twitch.Player('twitch-player-target', {
                     width: '100%',
@@ -711,13 +710,9 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (clipMatch && clipMatch[1]) {
                 const clipId = clipMatch[1];
                 if (playerTitle) playerTitle.textContent = `Twitch Clip Player (${clipId})`;
-                twitchPlayerInstance = new Twitch.Player('twitch-player-target', {
-                    width: '100%',
-                    height: 320,
-                    clip: clipId,
-                    autoplay: false,
-                    parent: [currentHost]
-                });
+                if (playerContainer) {
+                    playerContainer.innerHTML = `<iframe src="https://clips.twitch.tv/embed?clip=${clipId}&parent=${currentHost}&autoplay=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                }
             }
         }
     };
