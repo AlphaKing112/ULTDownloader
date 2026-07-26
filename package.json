@@ -1,0 +1,20 @@
+{
+  "name": "ultra-downloader",
+  "version": "3.0.0",
+  "description": "Ultra Downloader - Free 4K Media Downloader & Clip Processing Utility Studio",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "yt-dlp",
+    "downloader",
+    "clip-vault",
+    "ffmpeg",
+    "robocopy",
+    "media-utility"
+  ],
+  "author": "",
+  "license": "ISC"
+}

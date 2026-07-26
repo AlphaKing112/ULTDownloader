@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultra Downloader - Free 4K Video & Audio Downloader Studio</title>
+    <meta name="description" content="Ultra Downloader is a free 4K online video downloader, section clipper, MP4 converter, and YouTube tags analyzer. Download 1080p and 4K clips from YouTube, Kick, TikTok & Twitch instantly.">
+    <meta name="keywords" content="ultra downloader, 4k video downloader, youtube downloader, kick vod downloader, clip cutter, mp4 converter, youtube tags extractor, free online video downloader">
+    <meta name="robots" content="index, follow">
+    <meta name="author" content="Ultra Downloader Studio">
+    
+    <!-- Open Graph / Social Media SEO -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Ultra Downloader - Free 4K Video & Audio Downloader Studio">
+    <meta property="og:description" content="Download highest quality 4K/1080p videos, cut VOD clips, convert MP4 files, and extract YouTube tags online for free.">
+    <meta property="og:site_name" content="Ultra Downloader">
+
+    <!-- Twitter Card SEO -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Ultra Downloader - Free 4K Video & Audio Downloader Studio">
+    <meta name="twitter:description" content="Download 4K & 1080p60 videos, cut clip timestamps, and extract tags online.">
+
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <!-- Google Fonts Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="top-nav">
+            <div class="logo-area">
+                <div class="logo-icon-wrapper">
+                    <i class="fa-solid fa-bolt logo-icon"></i>
+                </div>
+                <div class="logo-titles">
+                    <span class="logo-text">ULTRA DOWNLOADER</span>
+                    <span class="logo-sub">Studio v3.0</span>
+                </div>
+            </div>
+            
+            <nav class="nav-tabs" id="main-nav-tabs">
+                <button class="nav-tab active" data-tab="tab-quick-download" title="Option 2: Download YT/TikTok Link">
+                    <i class="fa-solid fa-cloud-arrow-down"></i>
+                    <span>Quick Video</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-section-clipper" title="Option 3 & 4: Download Kick/YT Section">
+                    <i class="fa-solid fa-scissors"></i>
+                    <span>Section Clip</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-multi-section" title="Option 8: Download Multiple Sections">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span>Multi-Section</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-shorts-harvest" title="Option 7: Download Channel Shorts">
+                    <i class="fa-brands fa-youtube"></i>
+                    <span>Shorts Harvester</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-silence-cutter" title="Option 6: Audio Silence Cutter">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <span>Silence Cutter</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-file-converter" title="Option 5: Convert to MP4">
+                    <i class="fa-solid fa-file-video"></i>
+                    <span>MP4 Converter</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-yt-tags" title="Option 9 & 10: Tags & Transcript Analyzer">
+                    <i class="fa-solid fa-tags"></i>
+                    <span>Tags & AI</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-yt-thumbnail" title="Option 11: Get YT Thumbnail">
+                    <i class="fa-regular fa-image"></i>
+                    <span>Thumbnail</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-hdd-mirror" title="Option 1: Mirror Folder to HDD">
+                    <i class="fa-solid fa-hard-drive"></i>
+                    <span>HDD Mirror</span>
+                </button>
+            </nav>
+
+            <div class="server-status-badge" id="backend-status-badge">
+                <div class="status-indicator online" id="backend-status-indicator"></div>
+                <span id="backend-status-text">Client Mode</span>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="dashboard-grid">
+            <!-- Left Column: Controls & Dynamic Tool Forms -->
+            <section class="panel control-panel">
+                <div class="panel-header">
+                    <div class="header-title-group">
+                        <i class="fa-solid fa-sliders header-icon" id="tool-header-icon"></i>
+                        <h2 id="tab-title">Quick Video Downloader</h2>
+                    </div>
+                    <span class="badge option-badge" id="option-number-badge">Option #2</span>
+                </div>
+
+                <!-- Mobile Tool Selector (Visible on mobile screens so all options are 100% accessible) -->
+                <div class="mobile-tool-select-wrapper">
+                    <label for="mobile-tool-dropdown"><i class="fa-solid fa-toolbox"></i> Select Studio Tool:</label>
+                    <div class="select-wrapper">
+                        <select id="mobile-tool-dropdown">
+                            <option value="tab-quick-download">⚡ Quick Video Downloader (Option #2)</option>
+                            <option value="tab-section-clipper">✂️ Section Clip Extractor (Option #3 & #4)</option>
+                            <option value="tab-multi-section">📋 Multi-Section Batch Clipper (Option #8)</option>
+                            <option value="tab-shorts-harvest">▶️ YouTube Shorts Harvester (Option #7)</option>
+                            <option value="tab-silence-cutter">🪄 Audio Silence Cutter (Option #6)</option>
+                            <option value="tab-file-converter">🎥 Media MP4 Converter (Option #5)</option>
+                            <option value="tab-yt-tags">🏷️ Tags & AI Transcript (Option #9 & #10)</option>
+                            <option value="tab-yt-thumbnail">🖼️ YouTube Thumbnail Grabber (Option #11)</option>
+                            <option value="tab-hdd-mirror">💽 HDD Directory Mirror (Option #1)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Form Container for all Tool Views -->
+                <div class="tool-views-container">
+                    
+                    <!-- TAB 1: Quick Download (Option 2) -->
+                    <div class="tool-view active" id="tab-quick-download">
+                        <p class="tool-description">Download highest quality video + audio from YouTube, TikTok, Twitch, or Kick with automatic MP4 merging.</p>
+                        
+                        <div class="form-group">
+                            <label for="quick-url"><i class="fa-solid fa-link"></i> Media Link URL</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="quick-url" placeholder="https://www.youtube.com/watch?v=... or TikTok URL" required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('quick-url')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-val">
+                                <label for="quick-title"><i class="fa-solid fa-heading"></i> Write Title</label>
+                                <span class="fetch-status-badge" id="quick-title-status"></span>
+                            </div>
+                            <div class="input-wrapper">
+                                <input type="text" id="quick-title" placeholder="Write title (or paste link to auto-fill)...">
+                                <button type="button" class="btn-fetch-title" title="Auto-fetch Title from Link" onclick="fetchTitleForField('quick-url', 'quick-title', 'quick-title-status')">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <label for="quick-format"><i class="fa-solid fa-sliders"></i> Quality Profile</label>
+                                <div class="select-wrapper">
+                                    <select id="quick-format">
+                                        <option value="bestvideo+bestaudio/best" selected>🔥 MAX Quality (Highest Available: 4K / 1080p 60fps)</option>
+                                        <option value="bestvideo[height<=1080]+bestaudio/best">1080p Full HD (1080p60 / 1080p)</option>
+                                        <option value="bestvideo[height<=720]+bestaudio/best">720p HD (720p60 / 720p)</option>
+                                        <option value="bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best">⚡ Fast Remux MP4 (H.264/AAC Legacy)</option>
+                                        <option value="bestaudio/best">Audio Only (MP3/M4A)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="quick-output"><i class="fa-regular fa-folder-open"></i> Output Destination</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="quick-output" value="downloads/%(title)s_%(height)sp.%(ext)s">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('quick-output')" title="Select Output Folder from Computer">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: Section Clipper (Option 3 & 4) -->
+                    <div class="tool-view" id="tab-section-clipper">
+                        <p class="tool-description">Cut and download a specific segment from a Kick VOD or YouTube video with high precision timestamping.</p>
+
+                        <div class="form-group">
+                            <label for="section-url"><i class="fa-solid fa-link"></i> Video Link URL (YouTube or Kick)</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="section-url" placeholder="https://kick.com/video/... or YouTube URL" required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('section-url')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-val">
+                                <label for="section-title"><i class="fa-solid fa-heading"></i> Write Title</label>
+                                <span class="fetch-status-badge" id="section-title-status"></span>
+                            </div>
+                            <div class="input-wrapper">
+                                <input type="text" id="section-title" placeholder="Write title (or paste link to auto-fill)...">
+                                <button type="button" class="btn-fetch-title" title="Auto-fetch Title from Link" onclick="fetchTitleForField('section-url', 'section-title', 'section-title-status')">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="platform-detect-box" id="platform-detect-indicator">
+                            <i class="fa-solid fa-circle-info"></i> Paste a URL above to auto-detect Kick VOD vs YouTube parameters.
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <div class="label-with-val">
+                                    <label for="section-start"><i class="fa-regular fa-clock"></i> Start Time (HH:MM:SS)</label>
+                                    <button type="button" class="btn-timestamp-mark" onclick="markCurrentTimestamp('start')" title="Set current player playback position as start timestamp">
+                                        <i class="fa-solid fa-location-crosshairs"></i> Set Start
+                                    </button>
+                                </div>
+                                <div class="input-wrapper">
+                                    <input type="text" id="section-start" placeholder="00:01:30" value="00:00:00">
+                                </div>
+                            </div>
+                            <div class="form-group flex-1">
+                                <div class="label-with-val">
+                                    <label for="section-end"><i class="fa-regular fa-clock"></i> End Time (HH:MM:SS)</label>
+                                    <button type="button" class="btn-timestamp-mark" onclick="markCurrentTimestamp('end')" title="Set current player playback position as end timestamp">
+                                        <i class="fa-solid fa-location-crosshairs"></i> Set End
+                                    </button>
+                                </div>
+                                <div class="input-wrapper">
+                                    <input type="text" id="section-end" placeholder="00:04:15" value="00:01:00">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-row timestamp-quick-actions">
+                            <button type="button" class="btn btn-secondary btn-sm flex-1" onclick="markCurrentTimestamp('start')">
+                                <i class="fa-solid fa-play" style="color: #22c55e;"></i> Set Start Time from Player
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm flex-1" onclick="markCurrentTimestamp('end')">
+                                <i class="fa-solid fa-stop" style="color: #ef4444;"></i> Set End Time from Player
+                            </button>
+                        </div>
+
+                        <div class="form-group" id="kick-format-group">
+                            <label for="section-format-preset"><i class="fa-solid fa-display"></i> Quality / Format Preset</label>
+                            <div class="select-wrapper">
+                                <select id="section-format-preset">
+                                    <option value="auto">Auto-Detect Highest Available (1080p60 / 720p)</option>
+                                    <option value="1080p60">1080p 60fps (Kick High Quality)</option>
+                                    <option value="720p">720p HD</option>
+                                    <option value="best">Default Best MP4</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="section-output"><i class="fa-regular fa-folder-open"></i> Output Path</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="section-output" value="downloads/%(title)s.mp4">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('section-output')" title="Select Output Folder from Computer">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 3: Multi-Section Clipper (Option 8) -->
+                    <div class="tool-view" id="tab-multi-section">
+                        <p class="tool-description">Batch download multiple timestamp sections from a single YouTube video in one go.</p>
+
+                        <div class="form-group">
+                            <label for="multi-url"><i class="fa-solid fa-link"></i> YouTube Video Link</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="multi-url" placeholder="https://www.youtube.com/watch?v=..." required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('multi-url')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-plus-minus"></i> Add Time Range Range (HH:MM:SS-HH:MM:SS)</label>
+                            <div class="form-row">
+                                <div class="input-wrapper flex-1">
+                                    <input type="text" id="new-range-input" placeholder="e.g. 00:01:00-00:02:30">
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-add-range">
+                                    <i class="fa-solid fa-plus"></i> Add
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Active Ranges List -->
+                        <div class="ranges-list-container">
+                            <div class="ranges-header">
+                                <span>Configured Time Ranges</span>
+                                <button type="button" class="btn-text-danger" id="btn-clear-ranges">Clear All</button>
+                            </div>
+                            <ul class="ranges-list" id="ranges-list-ul">
+                                <li class="range-item">
+                                    <span><i class="fa-regular fa-bookmark"></i> 00:00:30-00:01:45</span>
+                                    <button type="button" class="btn-remove-range" onclick="removeRangeItem(this)"><i class="fa-solid fa-xmark"></i></button>
+                                </li>
+                                <li class="range-item">
+                                    <span><i class="fa-regular fa-bookmark"></i> 00:05:10-00:06:00</span>
+                                    <button type="button" class="btn-remove-range" onclick="removeRangeItem(this)"><i class="fa-solid fa-xmark"></i></button>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="form-group margin-top-sm">
+                            <label for="multi-output"><i class="fa-regular fa-folder-open"></i> Sections Directory</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="multi-output" value="downloads/yt-sections">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('multi-output')" title="Select Output Folder from Computer">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 4: Shorts Harvester (Option 7) -->
+                    <div class="tool-view" id="tab-shorts-harvest">
+                        <p class="tool-description">Download all Shorts (<60s duration) from any YouTube Channel or handle automatically.</p>
+
+                        <div class="form-group">
+                            <label for="shorts-channel"><i class="fa-brands fa-youtube"></i> Channel URL or Handle</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="shorts-channel" placeholder="e.g. @MrBeast or https://www.youtube.com/@channel" required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('shorts-channel')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <label for="shorts-duration"><i class="fa-solid fa-stopwatch"></i> Max Duration Filter</label>
+                                <div class="select-wrapper">
+                                    <select id="shorts-duration">
+                                        <option value="61">Shorts only (&lt; 61 seconds)</option>
+                                        <option value="121">Short clips (&lt; 2 minutes)</option>
+                                        <option value="301">Medium clips (&lt; 5 minutes)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="shorts-output"><i class="fa-regular fa-folder-open"></i> Shorts Output Path</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="shorts-output" value="downloads/shorts">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('shorts-output')" title="Select Output Folder from Computer">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="shorts-archive-check" checked>
+                                <span>Use Download Archive file to prevent re-downloading duplicate videos</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- TAB 5: Silence Cutter (Option 6) -->
+                    <div class="tool-view" id="tab-silence-cutter">
+                        <p class="tool-description">Automatically strip dead air and silent pauses from YouTube videos using Auto-Editor AI.</p>
+
+                        <div class="form-group">
+                            <label for="silence-url"><i class="fa-solid fa-link"></i> YouTube Video Link</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="silence-url" placeholder="https://www.youtube.com/watch?v=..." required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('silence-url')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-val">
+                                <label for="silence-title"><i class="fa-solid fa-heading"></i> Write Title</label>
+                                <span class="fetch-status-badge" id="silence-title-status"></span>
+                            </div>
+                            <div class="input-wrapper">
+                                <input type="text" id="silence-title" placeholder="Write title (or paste link to auto-fill)...">
+                                <button type="button" class="btn-fetch-title" title="Auto-fetch Title from Link" onclick="fetchTitleForField('silence-url', 'silence-title', 'silence-title-status')">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-val">
+                                <label for="silence-db"><i class="fa-solid fa-volume-xmark"></i> Silence Threshold (dB)</label>
+                                <span class="badge-db" id="silence-db-val">-33 dB</span>
+                            </div>
+                            <input type="range" id="silence-db" min="-80" max="0" value="-33" step="1" class="slider-control" oninput="document.getElementById('silence-db-val').textContent = this.value + ' dB'">
+                            
+                            <div class="db-guide-grid">
+                                <span onclick="setDbValue(-80)">-80 dB<br><small>Absolute</small></span>
+                                <span onclick="setDbValue(-60)">-60 dB<br><small>Hearing</small></span>
+                                <span onclick="setDbValue(-40)">-40 dB<br><small>Whisper</small></span>
+                                <span class="active-guide" onclick="setDbValue(-33)">-33 dB<br><small>Default</small></span>
+                                <span onclick="setDbValue(-20)">-20 dB<br><small>Normal</small></span>
+                                <span onclick="setDbValue(-10)">-10 dB<br><small>Loud</small></span>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="silence-margin"><i class="fa-solid fa-sliders"></i> Audio Frame Margin</label>
+                            <div class="input-wrapper">
+                                <input type="number" id="silence-margin" value="50" min="0" max="200">
+                            </div>
+                            <span class="field-hint">Extra frames preserved around speech cuts to prevent abrupt audio clipping.</span>
+                        </div>
+                    </div>
+
+                    <!-- TAB 6: MP4 Converter (Option 5) -->
+                    <div class="tool-view" id="tab-file-converter">
+                        <p class="tool-description">Convert local media files (MKV, MOV, AVI, WEBM, FLV) into clean streamable MP4 (H.264 / AAC).</p>
+
+                        <div class="form-group">
+                            <label for="convert-input"><i class="fa-regular fa-file"></i> Full Path to Input File</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="convert-input" placeholder="input_media_file.mkv" required>
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('convert-input')" title="Select Input File/Folder">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('convert-input')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="convert-name"><i class="fa-solid fa-file-signature"></i> Output Filename (without extension)</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="convert-name" placeholder="converted_video" value="converted_clip">
+                            </div>
+                            <span class="field-hint">File will be compiled and saved as .mp4 on your Desktop.</span>
+                        </div>
+                    </div>
+
+                    <!-- TAB 7: Tags & AI Transcript (Option 9 & 10) -->
+                    <div class="tool-view" id="tab-yt-tags">
+                        <p class="tool-description">Extract hidden video tags, formatted descriptions, or download subtitles and run AI transcript analysis.</p>
+
+                        <div class="form-group">
+                            <label for="tags-url"><i class="fa-solid fa-link"></i> YouTube Video Link</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="tags-url" placeholder="https://www.youtube.com/watch?v=..." required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('tags-url')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-layer-group"></i> Analysis Action Mode</label>
+                            <div class="mode-selector-grid">
+                                <label class="radio-card active" onclick="selectAnalysisMode('tags')">
+                                    <input type="radio" name="analysis-mode" value="tags" checked>
+                                    <div class="radio-card-content">
+                                        <i class="fa-solid fa-tags"></i>
+                                        <span>Extract Tags & Description</span>
+                                    </div>
+                                </label>
+                                <label class="radio-card" onclick="selectAnalysisMode('transcript')">
+                                    <input type="radio" name="analysis-mode" value="transcript">
+                                    <div class="radio-card-content">
+                                        <i class="fa-solid fa-brain"></i>
+                                        <span>AI Transcript Key Moments</span>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 8: YT Thumbnail (Option 11) -->
+                    <div class="tool-view" id="tab-yt-thumbnail">
+                        <p class="tool-description">Fetch maximum resolution YouTube video thumbnails, convert to JPG, and preview in browser.</p>
+
+                        <div class="form-group">
+                            <label for="thumb-url"><i class="fa-solid fa-link"></i> YouTube Video Link</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="thumb-url" placeholder="https://www.youtube.com/watch?v=..." required>
+                                <button type="button" class="btn-paste" onclick="pasteClipboard('thumb-url')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-val">
+                                <label for="thumb-title"><i class="fa-solid fa-heading"></i> Write Title</label>
+                                <span class="fetch-status-badge" id="thumb-title-status"></span>
+                            </div>
+                            <div class="input-wrapper">
+                                <input type="text" id="thumb-title" placeholder="Write title (or paste link to auto-fill)...">
+                                <button type="button" class="btn-fetch-title" title="Auto-fetch Title from Link" onclick="fetchTitleForField('thumb-url', 'thumb-title', 'thumb-title-status')">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Thumbnail Live Preview Card -->
+                        <div class="thumbnail-preview-card hidden" id="thumbnail-preview-card">
+                            <div class="thumb-img-wrapper">
+                                <img id="thumb-preview-img" src="" alt="YouTube Thumbnail Preview">
+                            </div>
+                            <div class="thumb-card-actions">
+                                <a id="thumb-download-link" class="btn btn-secondary btn-sm" download="thumbnail.jpg" target="_blank">
+                                    <i class="fa-solid fa-download"></i> Download JPG
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 9: HDD Mirror Sync (Option 1) -->
+                    <div class="tool-view" id="tab-hdd-mirror">
+                        <p class="tool-description">Sync and mirror local export clip folder to your external hard drive using Robocopy high-speed engine.</p>
+
+                        <div class="form-group">
+                            <label for="mirror-source"><i class="fa-regular fa-folder"></i> Export Source Folder</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="mirror-source" value="source_clips">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('mirror-source')" title="Select Export Source Folder">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="mirror-dest"><i class="fa-solid fa-hard-drive"></i> Destination HDD Folder</label>
+                            <div class="input-wrapper">
+                                <input type="text" id="mirror-dest" value="backup_destination">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('mirror-dest')" title="Select HDD Destination Folder">
+                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-shield-halved"></i> Robocopy Settings</label>
+                            <div class="robocopy-flags-box">
+                                <code>/MIR /R:1 /W:1 /NFL /NDL /NJH /NJS</code>
+                                <p class="field-hint margin-top-xs">Mirrors directory structure, removes extra files from HDD, retries once on lock.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Action Button Controls -->
+                <div class="button-group-vertical">
+                    <div class="button-group">
+                        <button type="button" id="action-btn" class="btn btn-primary flex-1">
+                            <i class="fa-solid fa-bolt"></i>
+                            <span>Execute Operation</span>
+                        </button>
+                        <button type="button" id="copy-cmd-btn" class="btn btn-secondary" title="View & Copy CLI Command">
+                            <i class="fa-solid fa-terminal"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Middle Column: Standalone Video Player & Terminal Output -->
+            <div class="middle-column-group">
+                
+                <!-- Embedded Standalone Media Video Player Panel -->
+                <section class="panel media-player-panel hidden" id="media-player-card">
+                    <div class="panel-header">
+                        <div class="header-title-group">
+                            <i class="fa-solid fa-circle-play player-icon" id="player-type-icon"></i>
+                            <h2 id="media-player-title">Media Video Player</h2>
+                        </div>
+                        <div class="player-controls-right">
+                            <button type="button" class="btn-icon" onclick="togglePlayerExpand()" title="Expand / Collapse Player">
+                                <i class="fa-solid fa-chevron-down" id="player-expand-icon"></i>
+                            </button>
+                            <button type="button" class="btn-icon" onclick="closeMediaPlayer()" title="Close Player">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="player-iframe-container" id="player-iframe-container">
+                        <iframe id="twitch-player-iframe" src="" height="280" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>
+                    </div>
+                </section>
+
+                <!-- Standalone Terminal Output Panel -->
+                <section class="panel console-panel">
+                    <div class="panel-header">
+                        <div class="header-title-group">
+                            <i class="fa-solid fa-terminal header-icon"></i>
+                            <h2>CLI Output & Live Stream</h2>
+                        </div>
+                        <div class="console-actions">
+                            <button id="btn-toggle-cli-collapse" class="btn-icon" onclick="toggleCliCollapse()" title="Expand / Collapse CLI Output">
+                                <i class="fa-solid fa-chevron-down" id="cli-collapse-icon"></i>
+                            </button>
+                            <button id="copy-log-btn" class="btn-icon" title="Copy Log to Clipboard">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                            <button id="clear-console-btn" class="btn-icon" title="Clear Console Log">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Extracted Tags & AI Transcript Results Display (Positioned Top of CLI Output) -->
+                    <div class="extracted-results-card hidden" id="extracted-results-card">
+                        <div class="results-header">
+                            <div class="results-title-group">
+                                <i class="fa-solid fa-tags results-icon" id="results-card-icon"></i>
+                                <span id="results-card-title">Extracted Video Tags & Metadata</span>
+                            </div>
+                            <div class="results-header-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="copyExtractedCategory('all')" title="Copy All Metadata">
+                                    <i class="fa-regular fa-copy"></i> Copy All
+                                </button>
+                                <button type="button" class="btn-icon" onclick="closeExtractedResults()" title="Close Results">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Video Tags Block -->
+                        <div class="results-section-block" id="results-video-tags-block">
+                            <div class="section-sub-header">
+                                <span><i class="fa-solid fa-tag"></i> Video Tags</span>
+                                <button type="button" class="btn-icon" onclick="copyExtractedCategory('video-tags')" title="Copy Video Tags">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </div>
+                            <div class="tags-cloud-large" id="results-video-tags-cloud"></div>
+                        </div>
+
+                        <!-- Channel Tags Block -->
+                        <div class="results-section-block" id="results-channel-tags-block">
+                            <div class="section-sub-header">
+                                <span><i class="fa-solid fa-layer-group"></i> Channel Tags & Categories</span>
+                                <button type="button" class="btn-icon" onclick="copyExtractedCategory('channel-tags')" title="Copy Channel Tags">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </div>
+                            <div class="tags-cloud-large" id="results-channel-tags-cloud"></div>
+                        </div>
+
+                        <!-- Description & Transcript Output Block -->
+                        <div class="results-section-block">
+                            <div class="section-sub-header">
+                                <span id="results-body-header-title"><i class="fa-solid fa-align-left"></i> Video Description</span>
+                                <button type="button" class="btn-icon" onclick="copyExtractedCategory('description')" title="Copy Description">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </div>
+                            <div class="results-text-box" id="results-text-box"></div>
+                        </div>
+                    </div>
+
+                    <!-- Animated Download Progress Card (Positioned Top of CLI Output) -->
+                    <div class="progress-card hidden" id="download-progress-card">
+                        <div class="progress-header">
+                            <div class="progress-title-group">
+                                <i class="fa-solid fa-cloud-arrow-down progress-icon spinning"></i>
+                                <span id="progress-status-title">Downloading Media...</span>
+                            </div>
+                            <span class="progress-percent" id="progress-percent-val">0%</span>
+                        </div>
+                        
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+
+                        <div class="progress-footer">
+                            <span id="progress-speed-text"><i class="fa-solid fa-gauge-high"></i> Speed: --</span>
+                            <span id="progress-eta-text"><i class="fa-regular fa-clock"></i> ETA: --</span>
+                        </div>
+                    </div>
+
+                    <!-- Terminal Display -->
+                    <div class="console-body" id="console-output">
+                        <div class="log-line system">[System] Clip Vault Utility Studio initialized.</div>
+                        <div class="log-line info">[Info] Select a tool from the top navigation bar to begin.</div>
+                        <div class="log-line success">[Ready] Standing by for media links or local command execution...</div>
+                    </div>
+
+                    <!-- Command Line Quick Bar -->
+                    <div class="cli-command-box">
+                        <div class="cli-label">
+                            <i class="fa-solid fa-code"></i> Generated CLI Command:
+                        </div>
+                        <div class="cli-code-wrapper">
+                            <code id="generated-cli-code">yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 ...</code>
+                            <button class="btn-icon-copy" title="Copy CLI Command" onclick="copyCliCommand()">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Right Column: Quick Status & Result Viewer -->
+            <aside class="panel status-panel">
+                <div class="panel-header">
+                    <h2>Vault Operations</h2>
+                </div>
+
+                <div class="status-metrics">
+                    <div class="metric-item">
+                        <div class="metric-label">
+                            <span class="dot connected"></span> Active Task
+                        </div>
+                        <span class="metric-value" id="val-task-status">Idle</span>
+                    </div>
+
+                    <div class="metric-item">
+                        <div class="metric-label">
+                            <span class="dot viewing"></span> Mode
+                        </div>
+                        <span class="metric-value" id="val-current-mode">Quick Video</span>
+                    </div>
+
+                    <div class="metric-item">
+                        <div class="metric-label">
+                            <span class="dot info-dot"></span> Backend Execution
+                        </div>
+                        <span class="metric-value highlight" id="val-backend-mode">Node.js Server</span>
+                    </div>
+                </div>
+
+                <!-- Help & Quick Reference Card -->
+                <div class="contact-card">
+                    <div class="card-title"><i class="fa-solid fa-lightbulb"></i> Power User Tip</div>
+                    <p class="card-desc" id="power-tip-desc">You can click the <i class="fa-solid fa-terminal"></i> button to view or copy the full PowerShell / CMD script before executing.</p>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- CLI Command Inspector Modal -->
+    <div class="modal-overlay hidden" id="cmd-modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-terminal"></i> Generated Command Inspector</h3>
+                <button class="btn-icon" onclick="closeCmdModal()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">This is the exact terminal command line built by Clip Vault Studio for this task:</p>
+                <div class="modal-code-block">
+                    <pre><code id="modal-cli-code">yt-dlp ...</code></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeCmdModal()">Close</button>
+                <button class="btn btn-primary" onclick="copyCliCommand(); closeCmdModal();">
+                    <i class="fa-regular fa-copy"></i> Copy Command
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Overwrite File Confirmation Modal -->
+    <div class="modal-overlay hidden" id="overwrite-modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-triangle-exclamation text-amber"></i> File Already Exists</h3>
+                <button class="btn-icon" onclick="cancelOverwriteModal()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">The destination output file already exists on your disk:</p>
+                <div class="file-conflict-box">
+                    <i class="fa-solid fa-file-video conflict-icon"></i>
+                    <span id="overwrite-file-name">downloads/video_clip.mp4</span>
+                </div>
+                <p class="modal-subtext">Do you want to replace and overwrite the existing file with the new download?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="cancelOverwriteModal()">Cancel</button>
+                <button class="btn btn-danger" id="btn-confirm-overwrite">
+                    <i class="fa-solid fa-rotate"></i> Overwrite File
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
