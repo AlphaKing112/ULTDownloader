@@ -1430,24 +1430,28 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const dirHandle = await window.showDirectoryPicker();
                 if (dirHandle && dirHandle.name) {
-                    let folderPath = `downloads\\${dirHandle.name}`;
+                    let folderPath = `downloads/${dirHandle.name}`;
                     let currentVal = inputElem.value.trim();
 
                     if (currentVal.includes('%(title)s')) {
-                        const filenamePart = currentVal.includes('\\') ? currentVal.substring(currentVal.lastIndexOf('\\') + 1) : '%(title)s.mp4';
-                        folderPath = `${folderPath}\\${filenamePart}`;
+                        const filenamePart = currentVal.includes('\\') || currentVal.includes('/') ? currentVal.substring(Math.max(currentVal.lastIndexOf('\\'), currentVal.lastIndexOf('/')) + 1) : '%(title)s.mp4';
+                        folderPath = `${folderPath}/${filenamePart}`;
                     } else if (currentVal.endsWith('.mp4')) {
-                        const filenamePart = currentVal.includes('\\') ? currentVal.substring(currentVal.lastIndexOf('\\') + 1) : 'clip.mp4';
-                        folderPath = `${folderPath}\\${filenamePart}`;
+                        const filenamePart = currentVal.includes('\\') || currentVal.includes('/') ? currentVal.substring(Math.max(currentVal.lastIndexOf('\\'), currentVal.lastIndexOf('/')) + 1) : 'clip.mp4';
+                        folderPath = `${folderPath}/${filenamePart}`;
                     }
 
                     inputElem.value = folderPath;
                     inputElem.dispatchEvent(new Event('input'));
                     updateGeneratedCommand();
-                    logToConsole(`[Folder Selected] Target folder: "${dirHandle.name}"`, 'success');
+                    logToConsole(`[Folder Selected] Target folder set to: "${dirHandle.name}"`, 'success');
                     return;
                 }
-            } catch (e) {}
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    logToConsole('[Notice] Browsers block selecting root "Desktop" for security on web apps. Please select or create a subfolder inside Desktop (e.g. a "Clips" folder) or use default "downloads/".', 'info');
+                }
+            }
         }
     };
 

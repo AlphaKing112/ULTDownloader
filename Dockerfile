@@ -1,6 +1,9 @@
 # Use official Node.js runtime as parent image
 FROM node:18-bullseye-slim
 
+# Prevent debconf interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install ffmpeg, python3, curl, and latest yt-dlp binary
 RUN apt-get update && apt-get install -y \
     ffmpeg \
