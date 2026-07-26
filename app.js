@@ -1244,27 +1244,33 @@ document.addEventListener('DOMContentLoaded', () => {
                                 }
                                 if (data.done) {
                                     finishProgressBar(data.exitCode === 0);
-                                }
-                                // Server sends downloadToken after done — use token (avoids URL encoding issues)
-                                if (data.downloadToken && data.fileName) {
-                                    const fname = data.fileName;
-                                    logToConsole(`[Download Ready] Saving "${fname}" to your Downloads folder...`, 'success');
-                                    try {
-                                        const dlUrl = `/api/download-file?token=${data.downloadToken}`;
-                                        const dlRes = await fetch(dlUrl);
-                                        if (!dlRes.ok) throw new Error(`Server responded ${dlRes.status}`);
-                                        const blob = await dlRes.blob();
-                                        const blobUrl = URL.createObjectURL(blob);
-                                        const a = document.createElement('a');
-                                        a.href = blobUrl;
-                                        a.download = fname;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        document.body.removeChild(a);
-                                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                                        logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
-                                    } catch (dlErr) {
-                                        logToConsole(`[Error] Could not fetch file: ${dlErr.message}`, 'error');
+                                    // downloadToken + fileName come in the same done packet
+                                    if (data.exitCode === 0 && data.downloadToken && data.fileName) {
+                                        const fname = data.fileName;
+                                        logToConsole(`[Download Ready] Saving "${fname}" to your Downloads folder...`, 'success');
+                                        try {
+                                            const dlUrl = `/api/download-file?token=${data.downloadToken}`;
+                                            logToConsole(`[Debug] Fetching: ${dlUrl}`, 'system');
+                                            const dlRes = await fetch(dlUrl);
+                                            if (!dlRes.ok) {
+                                                const errText = await dlRes.text().catch(() => '');
+                                                throw new Error(`Server responded ${dlRes.status}: ${errText}`);
+                                            }
+                                            const blob = await dlRes.blob();
+                                            const blobUrl = URL.createObjectURL(blob);
+                                            const a = document.createElement('a');
+                                            a.href = blobUrl;
+                                            a.download = fname;
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            document.body.removeChild(a);
+                                            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                                            logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
+                                        } catch (dlErr) {
+                                            logToConsole(`[Error] Could not fetch file: ${dlErr.message}`, 'error');
+                                        }
+                                    } else if (data.exitCode === 0 && !data.downloadToken) {
+                                        logToConsole('[Warning] Download completed but no file token received from server.', 'system');
                                     }
                                 }
                             } catch (e) {}

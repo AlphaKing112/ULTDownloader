@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const crypto = require('crypto');
+const urlModule = require('url');
 
 // Token map: token -> { absPath, expires }
 const downloadTokens = new Map();
@@ -266,20 +267,24 @@ const server = http.createServer((req, res) => {
                             }
                         } catch (e) {}
                     }
-                    res.write(JSON.stringify({ done: true, exitCode: code, outputFile }) + '\n');
-                    // Also create a download token so client can fetch without URL encoding issues
+                    // Combine done + token into a SINGLE packet to avoid client missing it
+                    let downloadToken = null;
+                    let fileName = null;
                     if (code === 0 && outputFile) {
                         const absFilePath = path.join(__dirname, outputFile);
+                        console.log(`[Server] Output file: ${absFilePath}, exists: ${fs.existsSync(absFilePath)}`);
                         if (fs.existsSync(absFilePath)) {
-                            const token = crypto.randomBytes(16).toString('hex');
-                            downloadTokens.set(token, { absPath: absFilePath, expires: Date.now() + 300000 });
+                            downloadToken = crypto.randomBytes(16).toString('hex');
+                            fileName = path.basename(absFilePath);
+                            downloadTokens.set(downloadToken, { absPath: absFilePath, expires: Date.now() + 300000 });
+                            console.log(`[Server] Token created: ${downloadToken} for file: ${fileName}`);
                             // Clean up expired tokens
                             for (const [k, v] of downloadTokens) {
                                 if (v.expires < Date.now()) downloadTokens.delete(k);
                             }
-                            res.write(JSON.stringify({ downloadToken: token, fileName: path.basename(absFilePath) }) + '\n');
                         }
                     }
+                    res.write(JSON.stringify({ done: true, exitCode: code, outputFile, downloadToken, fileName }) + '\n');
                     res.end();
                 });
 
@@ -298,26 +303,29 @@ const server = http.createServer((req, res) => {
 
     // API Download File to Browser Endpoint (token-based, avoids filename encoding issues)
     if (pathname === '/api/download-file' && req.method === 'GET') {
-        const params = new URL(req.url, `http://localhost`).searchParams;
-        const token = params.get('token');
-        console.log(`[DownloadFile] token=${token}, url=${req.url}`);
+        const query = urlModule.parse(req.url, true).query;
+        const token = query.token || '';
+        console.log(`[DownloadFile] req.url=${req.url} token=${token} mapSize=${downloadTokens.size}`);
         if (!token) {
-            res.writeHead(400);
+            console.log('[DownloadFile] 400: no token in request');
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
             return res.end('Missing token');
         }
         const entry = downloadTokens.get(token);
         if (!entry) {
-            res.writeHead(404);
+            console.log(`[DownloadFile] 404: token not found. Known tokens: ${[...downloadTokens.keys()].join(', ')}`);
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
             return res.end('Token not found or expired');
         }
         const absPath = entry.absPath;
-        console.log(`[DownloadFile] serving: ${absPath}`);
+        console.log(`[DownloadFile] Serving: ${absPath}`);
         if (!absPath.startsWith(path.join(__dirname, 'downloads'))) {
-            res.writeHead(403);
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
             return res.end('Forbidden');
         }
         if (!fs.existsSync(absPath)) {
-            res.writeHead(404);
+            downloadTokens.delete(token);
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
             return res.end('File not found on disk');
         }
         downloadTokens.delete(token); // one-time use
@@ -325,7 +333,7 @@ const server = http.createServer((req, res) => {
         const ext = path.extname(absPath).toLowerCase();
         const mimeMap = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.mkv': 'video/x-matroska', '.webm': 'video/webm', '.m4a': 'audio/m4a', '.wav': 'audio/wav' };
         const mime = mimeMap[ext] || 'application/octet-stream';
-        const safeFilename = path.basename(absPath).replace(/["\\]/g, '_');
+        const safeFilename = path.basename(absPath).replace(/[";\\]/g, '_');
         res.writeHead(200, {
             'Content-Type': mime,
             'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
@@ -337,6 +345,7 @@ const server = http.createServer((req, res) => {
         stream.on('end', () => {
             fs.unlink(absPath, (err) => {
                 if (!err) console.log(`[Server] Deleted from disk: ${path.basename(absPath)}`);
+                else console.log(`[Server] Delete failed: ${err.message}`);
             });
         });
         return;
