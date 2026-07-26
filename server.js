@@ -21,20 +21,27 @@ function getCookiesFlag(url = '') {
 
     if (process.env.YOUTUBE_COOKIES) {
         try {
-            let cookieText = process.env.YOUTUBE_COOKIES;
-            if (cookieText.includes('\\n') && !cookieText.includes('\n')) {
-                cookieText = cookieText.replace(/\\n/g, '\n');
+            let cookieText = process.env.YOUTUBE_COOKIES.trim();
+            if (cookieText.length > 20) {
+                if (cookieText.includes('\\n') && !cookieText.includes('\n')) {
+                    cookieText = cookieText.replace(/\\n/g, '\n');
+                }
+                if (cookieText.includes('\\t')) {
+                    cookieText = cookieText.replace(/\\t/g, '\t');
+                }
+                fs.writeFileSync(cookiesPath, cookieText);
+                return ` --cookies "${cookiesPath}"`;
             }
-            if (cookieText.includes('\\t')) {
-                cookieText = cookieText.replace(/\\t/g, '\t');
-            }
-            fs.writeFileSync(cookiesPath, cookieText);
-            return ` --cookies "${cookiesPath}"`;
         } catch (e) {}
     }
 
     if (fs.existsSync(cookiesPath)) {
-        return ` --cookies "${cookiesPath}"`;
+        try {
+            const stat = fs.statSync(cookiesPath);
+            if (stat.size > 20) {
+                return ` --cookies "${cookiesPath}"`;
+            }
+        } catch (e) {}
     }
 
     return '';
@@ -171,7 +178,7 @@ const server = http.createServer((req, res) => {
                         finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
                     } else if (!cookiesFlag && !finalCommand.includes('--extractor-args')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=default,web_embedded"');
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=ios,web_creator"');
                     }
                 }
 
