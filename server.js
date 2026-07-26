@@ -402,7 +402,7 @@ const server = http.createServer((req, res) => {
                 const cleanUrl = url.replace(/"/g, '\\"');
                 const cmd = `${getBaseYtdlpCmd(url)} -j --no-warnings "${cleanUrl}"`;
 
-                exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 20000 }, (error, stdout, stderr) => {
+                exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
                         const errDetail = (stderr || error?.message || 'No metadata returned').trim();
                         console.error(`[Server Metadata Fetch Error]: ${errDetail}`);
@@ -504,9 +504,9 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Title]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd(url)} --print title --no-warnings "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd(url)} --no-playlist --print title --no-warnings "${cleanUrl}"`;
                 
-                exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
+                exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
                         const errDetail = (stderr || error?.message || 'No title returned').trim();
                         console.error(`[Server Fetch Title Error]: ${errDetail}`);

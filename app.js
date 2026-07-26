@@ -314,7 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.fetchFullMetadataForUrl = async function(url) {
-        if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) return;
+        if (!url || !/^https?:\/\//i.test(url)) return;
 
         try {
             const res = await fetch('/api/fetch-metadata', {
