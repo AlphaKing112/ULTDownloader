@@ -166,10 +166,14 @@
                             <label for="quick-output"><i class="fa-regular fa-folder-open"></i> Output Destination</label>
                             <div class="input-wrapper">
                                 <input type="text" id="quick-output" value="downloads/%(title)s_%(height)sp.%(ext)s">
-                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('quick-output')" title="Select Output Folder from Computer">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('quick-output')" title="Select Subfolder from Computer">
                                     <i class="fa-solid fa-folder-tree"></i> Browse...
                                 </button>
+                                <button type="button" class="btn-preset-folder" onclick="setDesktopPreset('quick-output')" title="Set Desktop/Clips as Destination">
+                                    <i class="fa-solid fa-desktop"></i> Desktop/Clips
+                                </button>
                             </div>
+                            <span class="field-hint">📁 Click <b>Desktop/Clips</b> button or select a subfolder (Chrome blocks root Desktop for web security).</span>
                         </div>
                     </div>
 
@@ -252,10 +256,14 @@
                             <label for="section-output"><i class="fa-regular fa-folder-open"></i> Output Path</label>
                             <div class="input-wrapper">
                                 <input type="text" id="section-output" value="downloads/%(title)s.mp4">
-                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('section-output')" title="Select Output Folder from Computer">
+                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('section-output')" title="Select Subfolder from Computer">
                                     <i class="fa-solid fa-folder-tree"></i> Browse...
                                 </button>
+                                <button type="button" class="btn-preset-folder" onclick="setDesktopPreset('section-output')" title="Set Desktop/Clips as Destination">
+                                    <i class="fa-solid fa-desktop"></i> Desktop/Clips
+                                </button>
                             </div>
+                            <span class="field-hint">📁 Click <b>Desktop/Clips</b> button or select a subfolder (Chrome blocks root Desktop for web security).</span>
                         </div>
                     </div>
 

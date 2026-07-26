@@ -1455,6 +1455,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    window.setDesktopPreset = function(inputId) {
+        const inputElem = document.getElementById(inputId);
+        if (!inputElem) return;
+
+        let currentVal = inputElem.value.trim();
+        let filenamePart = '%(title)s.mp4';
+
+        if (currentVal.includes('%(title)s')) {
+            filenamePart = currentVal.includes('/') || currentVal.includes('\\') ? currentVal.substring(Math.max(currentVal.lastIndexOf('/'), currentVal.lastIndexOf('\\')) + 1) : '%(title)s.mp4';
+        } else if (currentVal.endsWith('.mp4')) {
+            filenamePart = currentVal.includes('/') || currentVal.includes('\\') ? currentVal.substring(Math.max(currentVal.lastIndexOf('/'), currentVal.lastIndexOf('\\')) + 1) : 'clip.mp4';
+        }
+
+        inputElem.value = `downloads/Clips/${filenamePart}`;
+        inputElem.dispatchEvent(new Event('input'));
+        updateGeneratedCommand();
+        logToConsole('[Folder Preset Set] Target destination configured to "downloads/Clips/"', 'success');
+    };
+
     // --- Backend Health Check ---
     async function checkBackendHealth() {
         try {

@@ -378,6 +378,25 @@ label i {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     padding: 0 10px;
+
+.btn-preset-folder {
+    background: rgba(124, 58, 237, 0.15);
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    color: var(--accent-purple-light);
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all var(--transition-speed);
+}
+
+.btn-preset-folder:hover {
+    background: var(--accent-purple);
+    color: #ffffff;
+    box-shadow: 0 0 10px rgba(124, 58, 237, 0.4);
+}
     transition: all 0.2s;
     width: 100%;
     box-sizing: border-box;
