@@ -232,7 +232,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" -j --no-warnings "${cleanUrl}"`;
+                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=mweb,ios,android_vr,android" -j --no-warnings "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 20000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
@@ -288,7 +288,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Extracting In-Memory Transcript]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
+                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=mweb,ios,android_vr,android" --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
                     const rawOutput = (stdout || '') + (stderr || '');
@@ -335,7 +335,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Fetching Title]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=android_vr,android,web" --print title --no-warnings "${cleanUrl}"`;
+                const cmd = `yt-dlp${getCookiesFlag()} --js-runtimes node --extractor-args "youtube:player_client=mweb,ios,android_vr,android" --print title --no-warnings "${cleanUrl}"`;
                 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
