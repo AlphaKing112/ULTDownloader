@@ -429,21 +429,7 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'tab-quick-download': {
                 const url = document.getElementById('quick-url').value.trim() || '<VIDEO_URL>';
                 const fmt = document.getElementById('quick-format').value;
-                let out = document.getElementById('quick-output').value;
-                const titleVal = document.getElementById('quick-title')?.value.trim();
-
-                if (titleVal) {
-                    const cleanTitle = sanitizeFilename(titleVal);
-                    if (out.includes('%(title)s')) {
-                        out = out.replace(/%\(title\)s/g, cleanTitle);
-                    } else {
-                        const lastSlash = Math.max(out.lastIndexOf('\\'), out.lastIndexOf('/'));
-                        if (lastSlash !== -1) {
-                            out = out.substring(0, lastSlash + 1) + cleanTitle + '_%(height)sp.%(ext)s';
-                        }
-                    }
-                }
-
+                let out = 'downloads/%(title)s_%(height)sp.%(ext)s';
                 cmd = `yt-dlp --js-runtimes node --newline -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
                 break;
             }
@@ -453,20 +439,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const start = document.getElementById('section-start').value.trim() || '00:00:00';
                 const end = document.getElementById('section-end').value.trim() || '00:01:00';
                 const preset = document.getElementById('section-format-preset').value;
-                let out = document.getElementById('section-output').value;
-                const titleVal = document.getElementById('section-title')?.value.trim();
-
-                if (titleVal) {
-                    const cleanTitle = sanitizeFilename(titleVal);
-                    if (out.includes('%(title)s')) {
-                        out = out.replace(/%\(title\)s/g, cleanTitle);
-                    } else {
-                        const lastSlash = Math.max(out.lastIndexOf('\\'), out.lastIndexOf('/'));
-                        if (lastSlash !== -1) {
-                            out = out.substring(0, lastSlash + 1) + cleanTitle + '.mp4';
-                        }
-                    }
-                }
+                let out = 'downloads/%(title)s.mp4';
 
                 if (url.toLowerCase().includes('kick.com/videos')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
@@ -1271,6 +1244,18 @@ document.addEventListener('DOMContentLoaded', () => {
                                 }
                                 if (data.done) {
                                     finishProgressBar(data.exitCode === 0);
+                                    // Auto-trigger browser download of the completed file
+                                    if (data.exitCode === 0 && data.outputFile) {
+                                        const dlUrl = `/api/download-file?path=${encodeURIComponent(data.outputFile)}`;
+                                        const fname = data.outputFile.split('/').pop();
+                                        logToConsole(`[Download Ready] Saving "${fname}" to your browser Downloads folder...`, 'success');
+                                        const a = document.createElement('a');
+                                        a.href = dlUrl;
+                                        a.download = fname;
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        document.body.removeChild(a);
+                                    }
                                 }
                             } catch (e) {}
                         }

@@ -206,7 +206,33 @@ const server = http.createServer((req, res) => {
                 if (child.stderr) child.stderr.on('data', d => handleOutput(d, 'system'));
 
                 child.on('close', (code) => {
-                    res.write(JSON.stringify({ done: true, exitCode: code }) + '\n');
+                    // Detect the output file that was written to downloads/
+                    let outputFile = null;
+                    if (code === 0) {
+                        try {
+                            const downloadsDir = path.join(__dirname, 'downloads');
+                            const allFiles = [];
+                            function scanDir(dir) {
+                                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                                entries.forEach(e => {
+                                    const full = path.join(dir, e.name);
+                                    if (e.isDirectory()) scanDir(full);
+                                    else {
+                                        const stat = fs.statSync(full);
+                                        if (stat.mtimeMs > Date.now() - 120000) { // modified in last 2 minutes
+                                            allFiles.push({ p: full, t: stat.mtimeMs });
+                                        }
+                                    }
+                                });
+                            }
+                            if (fs.existsSync(downloadsDir)) scanDir(downloadsDir);
+                            if (allFiles.length > 0) {
+                                allFiles.sort((a, b) => b.t - a.t);
+                                outputFile = allFiles[0].p.replace(__dirname + path.sep, '').replace(/\\/g, '/');
+                            }
+                        } catch (e) {}
+                    }
+                    res.write(JSON.stringify({ done: true, exitCode: code, outputFile }) + '\n');
                     res.end();
                 });
 
@@ -220,6 +246,35 @@ const server = http.createServer((req, res) => {
                 res.end(JSON.stringify({ error: 'Invalid payload' }));
             }
         });
+        return;
+    }
+
+    // API Download File to Browser Endpoint
+    if (pathname === '/api/download-file' && req.method === 'GET') {
+        const filePath = new URL(req.url, `http://localhost`).searchParams.get('path');
+        if (!filePath) {
+            res.writeHead(400);
+            return res.end('Missing path');
+        }
+        const absPath = path.join(__dirname, filePath);
+        if (!absPath.startsWith(path.join(__dirname, 'downloads'))) {
+            res.writeHead(403);
+            return res.end('Forbidden');
+        }
+        if (!fs.existsSync(absPath)) {
+            res.writeHead(404);
+            return res.end('File not found');
+        }
+        const stat = fs.statSync(absPath);
+        const ext = path.extname(absPath).toLowerCase();
+        const mimeMap = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.mkv': 'video/x-matroska', '.webm': 'video/webm', '.m4a': 'audio/m4a', '.wav': 'audio/wav' };
+        const mime = mimeMap[ext] || 'application/octet-stream';
+        res.writeHead(200, {
+            'Content-Type': mime,
+            'Content-Disposition': `attachment; filename="${path.basename(absPath)}"`,
+            'Content-Length': stat.size
+        });
+        fs.createReadStream(absPath).pipe(res);
         return;
     }
 
