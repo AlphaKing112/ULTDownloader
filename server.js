@@ -22,28 +22,39 @@ function getCookiesFlag(url = '') {
     if (process.env.YOUTUBE_COOKIES) {
         try {
             let cookieText = process.env.YOUTUBE_COOKIES.trim();
-            if (cookieText.length > 20) {
-                if (cookieText.includes('\\n') && !cookieText.includes('\n')) {
-                    cookieText = cookieText.replace(/\\n/g, '\n');
-                }
-                if (cookieText.includes('\\t')) {
-                    cookieText = cookieText.replace(/\\t/g, '\t');
-                }
-                fs.writeFileSync(cookiesPath, cookieText);
+            if (cookieText.startsWith('"') && cookieText.endsWith('"')) {
+                cookieText = cookieText.slice(1, -1).trim();
+            }
+            if (cookieText.startsWith("'") && cookieText.endsWith("'")) {
+                cookieText = cookieText.slice(1, -1).trim();
+            }
+            if (cookieText.includes('\\n')) {
+                cookieText = cookieText.replace(/\\n/g, '\n');
+            }
+            if (cookieText.includes('\\t')) {
+                cookieText = cookieText.replace(/\\t/g, '\t');
+            }
+            if (cookieText.length > 10) {
+                fs.writeFileSync(cookiesPath, cookieText, 'utf8');
+                console.log(`[Cookies] Successfully loaded YOUTUBE_COOKIES environment variable into cookies.txt (${cookieText.length} bytes)`);
                 return ` --cookies "${cookiesPath}"`;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error(`[Cookies Error]: Failed writing YOUTUBE_COOKIES: ${e.message}`);
+        }
     }
 
     if (fs.existsSync(cookiesPath)) {
         try {
             const stat = fs.statSync(cookiesPath);
-            if (stat.size > 20) {
+            if (stat.size > 10) {
+                console.log(`[Cookies] Found existing cookies.txt file (${stat.size} bytes)`);
                 return ` --cookies "${cookiesPath}"`;
             }
         } catch (e) {}
     }
 
+    console.log('[Cookies] No YOUTUBE_COOKIES environment variable or cookies.txt file detected.');
     return '';
 }
 
@@ -189,6 +200,10 @@ const server = http.createServer((req, res) => {
                     }
                     if (!finalCommand.includes('--js-runtimes')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --js-runtimes node');
+                    }
+                    const cookiesFlag = getCookiesFlag(finalCommand);
+                    if (cookiesFlag && !finalCommand.includes('--cookies')) {
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
                     }
                     if (isYT) {
                         if (!finalCommand.includes('--force-ipv4')) {
