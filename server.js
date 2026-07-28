@@ -50,10 +50,12 @@ function getCookiesFlag(url = '') {
 function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
     const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate Chrome' : '';
+    const isYouTube = url && (url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be'));
+    const ytArgs = isYouTube ? ' --extractor-args "youtube:player_client=android,ios,web_creator,mweb" --concurrent-fragments 5' : '';
     if (cookiesFlag) {
-        return `yt-dlp${cookiesFlag}${impersonateFlag} --js-runtimes node`;
+        return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
     }
-    return `yt-dlp${impersonateFlag} --js-runtimes node`;
+    return `yt-dlp${impersonateFlag}${ytArgs} --js-runtimes node`;
 }
 
 const MIME_TYPES = {
@@ -178,21 +180,25 @@ const server = http.createServer((req, res) => {
 
                 let finalCommand = command;
                 if (finalCommand.includes('yt-dlp')) {
+                    const isYT = finalCommand.toLowerCase().includes('youtube.com') || finalCommand.toLowerCase().includes('youtu.be');
                     if (!finalCommand.includes('--impersonate') && finalCommand.toLowerCase().includes('kick.com')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --impersonate Chrome');
                     }
-                    if (!finalCommand.includes('--sleep-requests')) {
+                    if (!finalCommand.includes('--sleep-requests') && !isYT) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --sleep-requests 1.5');
                     }
                     if (!finalCommand.includes('--js-runtimes')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --js-runtimes node');
                     }
+                    if (isYT && !finalCommand.includes('--concurrent-fragments')) {
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --concurrent-fragments 5');
+                    }
                     const cookiesFlag = getCookiesFlag(command);
                     if (cookiesFlag && !finalCommand.includes('--cookies')) {
-                        finalCommand = finalCommand.replace(/--extractor-args\s+"[^"]*"/g, '');
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
-                    } else if (!cookiesFlag && !finalCommand.includes('--extractor-args')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=android_vr,web_creator"');
+                    }
+                    if (isYT && !finalCommand.includes('--extractor-args')) {
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=android,ios,web_creator,mweb"');
                     }
                 }
 
