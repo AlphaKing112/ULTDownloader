@@ -456,11 +456,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (url.toLowerCase().includes('kick.com')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
-                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" --force-keyframes-at-cuts -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else if (url.toLowerCase().includes('twitch.tv')) {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" --force-keyframes-at-cuts -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" --force-keyframes-at-cuts -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 }
                 break;
             }
@@ -473,7 +473,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (items.length === 0) {
                     cmd = `# Add time ranges above. Example batch download:\nyt-dlp --js-runtimes node --newline "${url}" --download-sections "*00:01:00-00:02:30" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\clip_00-01-00-00-02-30.mp4"`;
                 } else {
-                    const rangesCmds = items.map(r => `yt-dlp --js-runtimes node --newline "${url}" --download-sections "*${r}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --force-keyframes-at-cuts -o "${outDir}\\clip_${r.replace(/:/g, '-')}.mp4"`).join(' && \n');
+                    const rangesCmds = items.map(r => `yt-dlp --js-runtimes node --newline "${url}" --download-sections "*${r}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\clip_${r.replace(/:/g, '-')}.mp4"`).join(' && \n');
                     cmd = `mkdir "${outDir}" 2>nul\n${rangesCmds}`;
                 }
                 break;
