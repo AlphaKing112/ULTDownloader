@@ -442,17 +442,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 const preset = document.getElementById('section-format-preset').value;
                 let out = 'downloads/%(title)s.mp4';
                 // -movflags +faststart: moves MP4 index to front → Windows player can play immediately
-                // -avoid_negative_ts make_zero + -fflags +genpts: fixes keyframe timestamp misalignment
-                const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts -movflags +faststart';
+                // -avoid_negative_ts make_zero + -fflags +genpts+discardcorrupt: fixes keyframe timestamp misalignment
+                const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts+discardcorrupt -movflags +faststart';
                 const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
 
                 if (url.toLowerCase().includes('kick.com')) {
                     const fmtStr = preset === 'auto' ? '1080p60' : preset;
-                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" --force-keyframes-at-cuts -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else if (url.toLowerCase().includes('twitch.tv')) {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" --force-keyframes-at-cuts -f "best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" --force-keyframes-at-cuts -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 }
                 break;
             }
