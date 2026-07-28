@@ -51,7 +51,7 @@ function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
     const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate Chrome' : '';
     const isYouTube = url && (url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be'));
-    const ytArgs = isYouTube ? ' --extractor-args "youtube:player_client=android,ios,web_creator,mweb" --concurrent-fragments 5' : '';
+    const ytArgs = isYouTube ? ' --extractor-args "youtube:player_client=tv,android_vr,web_creator" --concurrent-fragments 5' : '';
     if (cookiesFlag) {
         return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
     }
@@ -198,7 +198,7 @@ const server = http.createServer((req, res) => {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
                     }
                     if (isYT && !finalCommand.includes('--extractor-args')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=android,ios,web_creator,mweb"');
+                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=tv,android_vr,web_creator"');
                     }
                 }
 
