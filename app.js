@@ -316,6 +316,14 @@ document.addEventListener('DOMContentLoaded', () => {
     window.fetchFullMetadataForUrl = async function(url) {
         if (!url || !/^https?:\/\//i.test(url)) return;
 
+        // ONLY fetch & display Video Tags & Metadata card for YouTube URLs!
+        const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
+        if (!isYouTube) {
+            const card = document.getElementById('extracted-results-card');
+            if (card) card.classList.add('hidden');
+            return;
+        }
+
         try {
             const res = await fetch('/api/fetch-metadata', {
                 method: 'POST',
