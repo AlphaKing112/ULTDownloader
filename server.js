@@ -62,7 +62,8 @@ function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
     const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate Chrome' : '';
     const isYouTube = url && (url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be'));
-    const ytArgs = isYouTube ? ' --force-ipv4 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" --extractor-args "youtube:player_client=android_vr" --concurrent-fragments 5' : '';
+    const clientOverride = (!cookiesFlag && isYouTube) ? ' --extractor-args "youtube:player_client=android_vr"' : '';
+    const ytArgs = isYouTube ? ` --force-ipv4 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"${clientOverride} --concurrent-fragments 5` : '';
     if (cookiesFlag) {
         return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
     }
@@ -215,7 +216,7 @@ const server = http.createServer((req, res) => {
                         if (!finalCommand.includes('--concurrent-fragments')) {
                             finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --concurrent-fragments 5');
                         }
-                        if (!finalCommand.includes('--extractor-args')) {
+                        if (!cookiesFlag && !finalCommand.includes('--extractor-args')) {
                             finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=android_vr"');
                         }
                     }
