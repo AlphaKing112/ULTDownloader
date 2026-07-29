@@ -232,8 +232,13 @@ const server = http.createServer((req, res) => {
 
                 const child = exec(finalCommand, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
 
+                let hasInvalidCookies = false;
+
                 const handleOutput = (data, defaultType = 'info') => {
                     const text = data.toString();
+                    if (text.includes('cookies are no longer valid')) {
+                        hasInvalidCookies = true;
+                    }
                     const lines = text.split(/[\r\n]+/);
                     
                     lines.forEach(line => {
@@ -273,6 +278,15 @@ const server = http.createServer((req, res) => {
                 if (child.stderr) child.stderr.on('data', d => handleOutput(d, 'system'));
 
                 child.on('close', (code) => {
+                    if (hasInvalidCookies) {
+                        try {
+                            const cookiesPath = path.join(__dirname, 'cookies.txt');
+                            if (fs.existsSync(cookiesPath)) {
+                                fs.unlinkSync(cookiesPath);
+                                console.log('[Cookies] Auto-deleted expired cookies.txt file.');
+                            }
+                        } catch (e) {}
+                    }
                     // Detect the output file that was written to downloads/
                     let outputFile = null;
                     if (code === 0) {
