@@ -454,13 +454,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts+discardcorrupt+igndts -movflags +faststart';
                 const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
 
+                const avcFormat = 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]/bestvideo+bestaudio/best[ext=mp4]';
                 if (url.toLowerCase().includes('kick.com')) {
-                    const fmtStr = preset === 'auto' ? '1080p60' : preset;
-                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" -f ${fmtStr} --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    const fmtStr = preset === 'auto' ? avcFormat : preset;
+                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" -f "${fmtStr}" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else if (url.toLowerCase().includes('twitch.tv')) {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "${avcFormat}" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 } else {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "${avcFormat}" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
                 }
                 break;
             }
