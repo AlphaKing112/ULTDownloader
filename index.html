@@ -175,10 +175,36 @@
                     <div class="tool-view" id="tab-section-clipper">
                         <p class="tool-description">Cut and download a specific segment from a Kick VOD or YouTube video with high precision timestamping.</p>
 
-                        <div class="form-group">
-                            <label for="section-url"><i class="fa-solid fa-link"></i> Video Link URL (YouTube or Kick)</label>
+                        <!-- Channel VOD Browser: type a Twitch/Kick username to pick a VOD/highlight -->
+                        <div class="form-group channel-browser" id="channel-browser">
+                            <div class="label-with-val">
+                                <label for="channel-username"><i class="fa-solid fa-user"></i> Find by Streamer Username</label>
+                                <span class="fetch-status-badge" id="channel-videos-status"></span>
+                            </div>
+                            <div class="channel-toggle-row">
+                                <div class="channel-toggle" id="channel-platform-toggle">
+                                    <button type="button" class="channel-toggle-btn twitch active" data-platform="twitch"><i class="fa-brands fa-twitch"></i> Twitch</button>
+                                    <button type="button" class="channel-toggle-btn kick" data-platform="kick"><i class="fa-solid fa-k"></i> Kick</button>
+                                </div>
+                                <div class="channel-toggle" id="channel-type-toggle">
+                                    <button type="button" class="channel-toggle-btn active" data-type="vods">VODs</button>
+                                    <button type="button" class="channel-toggle-btn" data-type="highlights" id="channel-type-highlights">Highlights</button>
+                                    <button type="button" class="channel-toggle-btn" data-type="clips">Clips</button>
+                                </div>
+                            </div>
                             <div class="input-wrapper">
-                                <input type="url" id="section-url" placeholder="https://kick.com/video/... or YouTube URL" required>
+                                <input type="text" id="channel-username" placeholder="Type a username, e.g. xqc..." autocomplete="off" spellcheck="false">
+                                <button type="button" class="btn-fetch-title" id="channel-search-btn" title="Load channel videos">
+                                    <i class="fa-solid fa-magnifying-glass"></i>
+                                </button>
+                            </div>
+                            <div class="channel-videos-list hidden" id="channel-videos-list"></div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="section-url"><i class="fa-solid fa-link"></i> Video Link URL (YouTube, Twitch or Kick)</label>
+                            <div class="input-wrapper">
+                                <input type="url" id="section-url" placeholder="Pick a VOD above, or paste a Kick / Twitch / YouTube URL" required>
                                 <button type="button" class="btn-paste" onclick="pasteClipboard('section-url')"><i class="fa-regular fa-clipboard"></i></button>
                             </div>
                         </div>

@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const crypto = require('crypto');
 const urlModule = require('url');
 
@@ -68,6 +68,96 @@ function getBaseYtdlpCmd(url = '') {
         return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
     }
     return `yt-dlp${impersonateFlag}${ytArgs} --js-runtimes node`;
+}
+
+// --- Channel VOD / Highlight / Clip Browser (Twitch + Kick) ---
+const channelVideosCache = new Map(); // key -> { expires, data }
+const CHANNEL_CACHE_MS = 3 * 60 * 1000;
+const PYTHON_BIN = process.platform === 'win32' ? 'python' : 'python3';
+
+// Kick's API sits behind a bot filter that rejects plain Node fetch, so we reuse the
+// curl_cffi Chrome impersonation that yt-dlp's --impersonate flag already depends on.
+const KICK_FETCH_PY = [
+    'import sys, json',
+    'from curl_cffi import requests',
+    'r = requests.get(sys.argv[1], impersonate="chrome", timeout=20, headers={"Accept": "application/json"})',
+    'sys.stdout.write(json.dumps({"status": r.status_code, "body": r.text}))'
+].join('\n');
+
+function fetchKickJson(apiUrl) {
+    return new Promise((resolve, reject) => {
+        execFile(PYTHON_BIN, ['-c', KICK_FETCH_PY, apiUrl], { maxBuffer: 1024 * 1024 * 20, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
+            if (error && !stdout) return reject(new Error((stderr || error.message || 'Kick request failed').trim().split('\n').pop()));
+            try {
+                const { status, body } = JSON.parse(stdout);
+                if (status === 404) return reject(new Error('Kick channel not found.'));
+                if (status !== 200) return reject(new Error(`Kick API responded with HTTP ${status}`));
+                resolve(JSON.parse(body));
+            } catch (e) {
+                reject(new Error('Could not parse Kick API response'));
+            }
+        });
+    });
+}
+
+async function fetchKickChannelVideos(username, type) {
+    const slug = username.toLowerCase().replace(/_/g, '-');
+    if (type === 'clips' || type === 'highlights') {
+        const data = await fetchKickJson(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/clips?sort=date&time=all`);
+        const clips = Array.isArray(data?.clips) ? data.clips : [];
+        return clips.map(c => ({
+            id: c.id,
+            title: c.title || c.id,
+            url: `https://kick.com/${c.channel?.slug || slug}/clips/${c.id}`,
+            thumbnail: c.thumbnail_url || '',
+            duration: Number(c.duration) || 0,
+            views: c.views ?? c.view_count ?? null,
+            date: c.created_at || null
+        }));
+    }
+    const data = await fetchKickJson(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/videos`);
+    const list = Array.isArray(data) ? data : [];
+    return list
+        .filter(v => v && v.video && v.video.uuid && !v.is_live)
+        .map(v => ({
+            id: v.video.uuid,
+            title: v.session_title || `Kick VOD ${v.video.uuid}`,
+            url: `https://kick.com/${slug}/videos/${v.video.uuid}`,
+            thumbnail: v.thumbnail?.src || '',
+            duration: Math.round((Number(v.duration) || 0) / 1000), // Kick returns ms
+            views: v.views ?? v.video.views ?? null,
+            date: v.start_time || v.created_at || null
+        }));
+}
+
+function fetchTwitchChannelVideos(username, type) {
+    const listUrl = type === 'clips'
+        ? `https://www.twitch.tv/${username}/clips?filter=clips&range=7d`
+        : `https://www.twitch.tv/${username}/videos?filter=${type === 'highlights' ? 'highlights' : 'archives'}&sort=time`;
+
+    return new Promise((resolve, reject) => {
+        execFile('yt-dlp', ['--flat-playlist', '-J', '--playlist-end', '30', '--no-warnings', listUrl],
+            { maxBuffer: 1024 * 1024 * 20, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
+                if (error || !stdout || !stdout.trim()) {
+                    return reject(new Error((stderr || error?.message || 'No data returned from Twitch').trim().split('\n').pop()));
+                }
+                try {
+                    const info = JSON.parse(stdout);
+                    const entries = Array.isArray(info.entries) ? info.entries : [];
+                    resolve(entries.filter(e => e && e.url).map(e => ({
+                        id: String(e.id || '').replace(/^v/, ''),
+                        title: e.title || e.id,
+                        url: e.url,
+                        thumbnail: e.thumbnail || '',
+                        duration: Number(e.duration) || 0,
+                        views: e.view_count ?? null,
+                        date: e.timestamp ? new Date(e.timestamp * 1000).toISOString() : null
+                    })));
+                } catch (e) {
+                    reject(new Error('Could not parse Twitch channel listing'));
+                }
+            });
+    });
 }
 
 const MIME_TYPES = {
@@ -176,6 +266,38 @@ const server = http.createServer((req, res) => {
     if (pathname === '/api/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ status: 'ok', server: 'ULTDownloader Backend', uptime: process.uptime() }));
+    }
+
+    // API Channel Video Browser: list a streamer's VODs / highlights / clips on Twitch or Kick
+    if (pathname === '/api/channel-videos' && req.method === 'GET') {
+        const platform = (parsedUrl.searchParams.get('platform') || '').toLowerCase();
+        const username = (parsedUrl.searchParams.get('username') || '').trim().replace(/^@/, '');
+        const type = (parsedUrl.searchParams.get('type') || 'vods').toLowerCase();
+        const sendJson = (code, obj) => {
+            res.writeHead(code, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(obj));
+        };
+
+        if (!['twitch', 'kick'].includes(platform)) return sendJson(400, { success: false, error: 'platform must be twitch or kick' });
+        if (!['vods', 'highlights', 'clips'].includes(type)) return sendJson(400, { success: false, error: 'type must be vods, highlights or clips' });
+        if (!/^[A-Za-z0-9_-]{2,30}$/.test(username)) return sendJson(400, { success: false, error: 'Invalid username' });
+
+        const cacheKey = `${platform}:${username.toLowerCase()}:${type}`;
+        const cached = channelVideosCache.get(cacheKey);
+        if (cached && cached.expires > Date.now()) return sendJson(200, cached.data);
+
+        console.log(`[Server Channel Browser]: ${platform} / ${username} / ${type}`);
+        const loader = platform === 'kick' ? fetchKickChannelVideos(username, type) : fetchTwitchChannelVideos(username, type);
+        loader.then(videos => {
+            const data = { success: true, platform, username, type, videos };
+            channelVideosCache.set(cacheKey, { expires: Date.now() + CHANNEL_CACHE_MS, data });
+            for (const [k, v] of channelVideosCache) if (v.expires < Date.now()) channelVideosCache.delete(k);
+            sendJson(200, data);
+        }).catch(err => {
+            console.error(`[Server Channel Browser Error]: ${err.message}`);
+            sendJson(200, { success: false, platform, username, type, error: err.message });
+        });
+        return;
     }
 
     // API Command Execution Endpoint (Chunked Real-Time Progress Stream)

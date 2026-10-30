@@ -160,9 +160,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sectionUrlInput) {
         sectionUrlInput.addEventListener('input', () => {
             const url = sectionUrlInput.value.trim().toLowerCase();
-            if (url.includes('kick.com/videos')) {
+            if (url.includes('kick.com/videos') || /kick\.com\/[\w-]+\/videos\//.test(url)) {
                 platformIndicator.innerHTML = '<i class="fa-solid fa-bolt" style="color: #22c55e;"></i> <strong>Kick VOD Detected!</strong> Format auto-optimization & postprocessing enabled.';
                 platformIndicator.style.borderColor = '#22c55e';
+            } else if (url.includes('kick.com') && url.includes('clip')) {
+                platformIndicator.innerHTML = '<i class="fa-solid fa-bolt" style="color: #22c55e;"></i> <strong>Kick Clip Detected!</strong> Format auto-optimization enabled.';
+                platformIndicator.style.borderColor = '#22c55e';
+            } else if (url.includes('twitch.tv')) {
+                platformIndicator.innerHTML = '<i class="fa-brands fa-twitch" style="color: #9146ff;"></i> <strong>Twitch Video Detected!</strong> Use the player to mark start/end times.';
+                platformIndicator.style.borderColor = '#9146ff';
             } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
                 platformIndicator.innerHTML = '<i class="fa-brands fa-youtube" style="color: #ef4444;"></i> <strong>YouTube Video Detected!</strong> Direct timestamp cutting active.';
                 platformIndicator.style.borderColor = '#ef4444';
@@ -386,6 +392,233 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     });
+
+    // --- Channel VOD Browser (Section Clip Extractor) ---
+    // Type a Twitch/Kick username -> list VODs / highlights / clips -> click one to load it as the section URL.
+    const channelUsernameInput = document.getElementById('channel-username');
+    const channelSearchBtn = document.getElementById('channel-search-btn');
+    const channelVideosList = document.getElementById('channel-videos-list');
+    const channelVideosStatus = document.getElementById('channel-videos-status');
+    const channelPlatformToggle = document.getElementById('channel-platform-toggle');
+    const channelTypeToggle = document.getElementById('channel-type-toggle');
+    const channelHighlightsBtn = document.getElementById('channel-type-highlights');
+
+    let channelPlatform = 'twitch';
+    let channelType = 'vods';
+    let channelRequestSeq = 0;
+    let channelDebounceTimer = null;
+    let lastChannelQueryKey = '';
+
+    function setChannelStatus(text, cls = '') {
+        if (!channelVideosStatus) return;
+        channelVideosStatus.textContent = text;
+        channelVideosStatus.className = `fetch-status-badge ${cls}`.trim();
+    }
+
+    function setActiveToggle(container, attr, value) {
+        if (!container) return;
+        container.querySelectorAll('.channel-toggle-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute(attr) === value);
+        });
+    }
+
+    function formatRelativeDate(iso) {
+        if (!iso) return '';
+        const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
+        if (isNaN(d)) return '';
+        const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+        if (days <= 0) return 'today';
+        if (days === 1) return 'yesterday';
+        if (days < 30) return `${days} days ago`;
+        return d.toLocaleDateString();
+    }
+
+    function formatViews(n) {
+        if (n === null || n === undefined) return '';
+        if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M views`;
+        if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K views`;
+        return `${n} views`;
+    }
+
+    function escapeAttr(text) {
+        return escapeHtml(String(text || '')).replace(/"/g, '&quot;');
+    }
+
+    // Accept plain usernames as well as pasted channel links (twitch.tv/name, kick.com/name)
+    function normalizeChannelInput(raw) {
+        let val = (raw || '').trim();
+        const linkMatch = val.match(/(?:https?:\/\/)?(?:www\.|m\.)?(twitch\.tv|kick\.com)\/([A-Za-z0-9_-]+)/i);
+        if (linkMatch) {
+            const detected = linkMatch[1].toLowerCase().startsWith('kick') ? 'kick' : 'twitch';
+            if (detected !== channelPlatform) selectChannelPlatform(detected, false);
+            val = linkMatch[2];
+        }
+        return val.replace(/^@/, '');
+    }
+
+    function selectChannelPlatform(platform, reload = true) {
+        channelPlatform = platform;
+        setActiveToggle(channelPlatformToggle, 'data-platform', platform);
+        // Kick has no "highlights" concept - its equivalent is clips
+        if (channelHighlightsBtn) channelHighlightsBtn.classList.toggle('hidden', platform === 'kick');
+        if (platform === 'kick' && channelType === 'highlights') selectChannelType('clips', false);
+        if (reload) loadChannelVideos(true);
+    }
+
+    function selectChannelType(type, reload = true) {
+        channelType = type;
+        setActiveToggle(channelTypeToggle, 'data-type', type);
+        if (reload) loadChannelVideos(true);
+    }
+
+    function renderChannelVideos(videos, username) {
+        if (!channelVideosList) return;
+        channelVideosList.classList.remove('hidden');
+        if (!videos.length) {
+            const label = channelType === 'vods' ? 'VODs' : channelType;
+            channelVideosList.innerHTML = `<div class="channel-videos-empty">No ${escapeHtml(label)} found for <strong>${escapeHtml(username)}</strong> on ${channelPlatform === 'kick' ? 'Kick' : 'Twitch'}.</div>`;
+            return;
+        }
+        const currentUrl = sectionUrlInput ? sectionUrlInput.value.trim() : '';
+        channelVideosList.innerHTML = videos.map((v, i) => {
+            const meta = [formatRelativeDate(v.date), formatViews(v.views)].filter(Boolean).join(' • ');
+            const thumb = v.thumbnail
+                ? `<img src="${escapeAttr(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`
+                : '';
+            return `<button type="button" class="channel-video-item${v.url === currentUrl ? ' selected' : ''}" data-index="${i}" title="${escapeAttr(v.title)}">
+                        <span class="channel-video-thumb">${thumb}<span class="channel-video-duration">${formatSecondsToHHMMSS(v.duration)}</span></span>
+                        <span class="channel-video-info">
+                            <span class="channel-video-title">${escapeHtml(v.title || 'Untitled')}</span>
+                            <span class="channel-video-meta">${escapeHtml(meta)}</span>
+                        </span>
+                    </button>`;
+        }).join('');
+
+        channelVideosList.querySelectorAll('.channel-video-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                channelVideosList.querySelectorAll('.channel-video-item').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectChannelVideo(videos[Number(btn.dataset.index)]);
+            });
+        });
+    }
+
+    function selectChannelVideo(video) {
+        if (!video || !sectionUrlInput) return;
+        const titleElem = document.getElementById('section-title');
+        const startElem = document.getElementById('section-start');
+        const endElem = document.getElementById('section-end');
+
+        // Prime the title cache so the auto-fetch resolves instantly without another yt-dlp call
+        if (video.title) titleFetchCache.set(video.url, video.title);
+        if (titleElem && video.title) {
+            titleElem.value = video.title;
+            titleElem.dataset.autoFetched = 'true';
+        }
+
+        const duration = Math.floor(video.duration || 0);
+        if (startElem && endElem) {
+            if (channelType === 'clips' && duration > 0) {
+                // Clips are short: default to the whole clip
+                startElem.value = '00:00:00';
+                endElem.value = formatSecondsToHHMMSS(duration);
+            } else if (duration > 0) {
+                const toSec = (t) => (t || '').split(':').reduce((acc, p) => acc * 60 + (parseInt(p, 10) || 0), 0);
+                if (toSec(startElem.value) >= duration) startElem.value = '00:00:00';
+                if (toSec(endElem.value) > duration) endElem.value = formatSecondsToHHMMSS(duration);
+            }
+        }
+
+        sectionUrlInput.value = video.url;
+        sectionUrlInput.dispatchEvent(new Event('input')); // platform detect + title + player embed
+        updateGeneratedCommand();
+
+        const kind = channelType === 'vods' ? 'VOD' : (channelType === 'highlights' ? 'Highlight' : 'Clip');
+        logToConsole(`[Channel Browser] Loaded ${channelPlatform === 'kick' ? 'Kick' : 'Twitch'} ${kind}: "${video.title}" (${formatSecondsToHHMMSS(duration)})`, 'success');
+    }
+
+    async function loadChannelVideos(force = false) {
+        if (!channelUsernameInput) return;
+        const username = normalizeChannelInput(channelUsernameInput.value);
+        if (username !== channelUsernameInput.value.trim()) channelUsernameInput.value = username;
+
+        if (!username || username.length < 2) {
+            setChannelStatus('');
+            if (channelVideosList) { channelVideosList.innerHTML = ''; channelVideosList.classList.add('hidden'); }
+            lastChannelQueryKey = '';
+            return;
+        }
+        if (!/^[A-Za-z0-9_-]{2,30}$/.test(username)) {
+            setChannelStatus('Usernames can only contain letters, numbers, _ and -', 'error');
+            return;
+        }
+
+        const queryKey = `${channelPlatform}:${username.toLowerCase()}:${channelType}`;
+        if (!force && queryKey === lastChannelQueryKey) return;
+        lastChannelQueryKey = queryKey;
+
+        const seq = ++channelRequestSeq;
+        const platformLabel = channelPlatform === 'kick' ? 'Kick' : 'Twitch';
+        setChannelStatus(`⚡ Loading ${username}'s ${channelType} from ${platformLabel}...`, 'loading');
+        if (channelSearchBtn) channelSearchBtn.classList.add('fetching');
+
+        try {
+            const params = new URLSearchParams({ platform: channelPlatform, username, type: channelType });
+            const res = await fetch(`/api/channel-videos?${params.toString()}`);
+            const data = await res.json();
+            if (seq !== channelRequestSeq) return; // a newer search superseded this one
+
+            if (!data.success) {
+                lastChannelQueryKey = ''; // allow retry
+                setChannelStatus(data.error || 'Could not load channel', 'error');
+                if (channelVideosList) {
+                    channelVideosList.classList.remove('hidden');
+                    channelVideosList.innerHTML = `<div class="channel-videos-empty">${escapeHtml(data.error || 'Could not load channel videos.')}</div>`;
+                }
+                return;
+            }
+
+            const videos = Array.isArray(data.videos) ? data.videos : [];
+            setChannelStatus(videos.length ? `✓ ${videos.length} found — click one to load` : 'Nothing found', videos.length ? 'success' : '');
+            renderChannelVideos(videos, username);
+        } catch (err) {
+            if (seq !== channelRequestSeq) return;
+            lastChannelQueryKey = '';
+            setChannelStatus('Backend server unreachable', 'error');
+        } finally {
+            if (seq === channelRequestSeq && channelSearchBtn) channelSearchBtn.classList.remove('fetching');
+        }
+    }
+
+    if (channelUsernameInput) {
+        channelUsernameInput.addEventListener('input', () => {
+            clearTimeout(channelDebounceTimer);
+            channelDebounceTimer = setTimeout(() => loadChannelVideos(false), 700);
+        });
+        channelUsernameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                clearTimeout(channelDebounceTimer);
+                loadChannelVideos(true);
+            }
+        });
+    }
+    if (channelSearchBtn) {
+        channelSearchBtn.addEventListener('click', () => {
+            clearTimeout(channelDebounceTimer);
+            loadChannelVideos(true);
+        });
+    }
+    if (channelPlatformToggle) {
+        channelPlatformToggle.querySelectorAll('.channel-toggle-btn').forEach(btn => {
+            btn.addEventListener('click', () => selectChannelPlatform(btn.getAttribute('data-platform')));
+        });
+    }
+    if (channelTypeToggle) {
+        channelTypeToggle.querySelectorAll('.channel-toggle-btn').forEach(btn => {
+            btn.addEventListener('click', () => selectChannelType(btn.getAttribute('data-type')));
+        });
+    }
 
     // --- Clipboard Paste Helper ---
     window.pasteClipboard = async function(inputId) {
