@@ -1729,7 +1729,7 @@ input[type="number"] {
 .channel-range-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .channel-range-btn.active { background: var(--accent-purple); color: #fff; }
 
-/* ===== Streamer Media Vault Panel (below CLI Output & Live Stream) ===== */
+/* ===== Streamer Media Vault Panel (Positioned below CLI Output & Live Stream) ===== */
 .channel-media-vault-panel {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
@@ -1836,7 +1836,7 @@ input[type="number"] {
     transition: opacity 0.2s;
 }
 
-/* Hover 5-second Video Preview styles */
+/* Hover 15-second Video Preview styles */
 .channel-preview-container {
     position: absolute;
     top: 0;
@@ -1844,7 +1844,6 @@ input[type="number"] {
     width: 100%;
     height: 100%;
     z-index: 2;
-    pointer-events: none;
     background: #000;
     border-radius: 6px;
     overflow: hidden;
@@ -1862,7 +1861,7 @@ input[type="number"] {
     position: absolute;
     top: 6px;
     left: 6px;
-    z-index: 3;
+    z-index: 4;
     background: rgba(239, 68, 68, 0.92);
     color: #fff;
     font-size: 9.5px;
@@ -1875,6 +1874,7 @@ input[type="number"] {
     letter-spacing: 0.5px;
     text-transform: uppercase;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
 }
 
 .channel-preview-bar {
@@ -1883,14 +1883,49 @@ input[type="number"] {
     left: 0;
     height: 3px;
     background: #ef4444;
-    z-index: 3;
+    z-index: 4;
     width: 0%;
-    animation: previewProgress 5s linear forwards;
+    animation: previewProgress 15s linear forwards;
+    pointer-events: none;
 }
 
 @keyframes previewProgress {
     from { width: 0%; }
     to { width: 100%; }
+}
+
+/* Volume button on bottom right of preview for clips / VODs */
+.channel-preview-vol-btn {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 5;
+    background: rgba(18, 20, 29, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+    backdrop-filter: blur(4px);
+    pointer-events: auto;
+}
+
+.channel-preview-vol-btn:hover {
+    background: rgba(139, 92, 246, 0.9);
+    border-color: var(--accent-purple-light);
+    transform: scale(1.1);
+}
+
+.channel-preview-vol-btn.unmuted {
+    background: #22c55e;
+    border-color: #22c55e;
+    color: #fff;
 }
 
 .channel-video-duration {

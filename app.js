@@ -511,6 +511,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reload) loadChannelVideos(true);
     }
 
+    let channelPreviewMuted = true;
+
     function setupThumbnailHoverPreview(thumbElem, video, platform, type) {
         if (!thumbElem || !video) return;
 
@@ -539,23 +541,24 @@ document.addEventListener('DOMContentLoaded', () => {
             hoverTimer = setTimeout(() => {
                 const currentHost = window.location.hostname || 'localhost';
                 let previewSrc = '';
+                const mutedParam = channelPreviewMuted ? 'true' : 'false';
 
                 if (platform === 'twitch') {
                     const clipMatch = video.url.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
                     if (type === 'clips' || clipMatch) {
                         const clipId = (clipMatch && clipMatch[1]) ? clipMatch[1] : video.id;
-                        previewSrc = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}&parent=${currentHost}&autoplay=true&muted=true`;
+                        previewSrc = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}&parent=${currentHost}&autoplay=true&muted=${mutedParam}`;
                     } else {
                         const vodId = String(video.id).replace(/^v/, '');
-                        previewSrc = `https://player.twitch.tv/?video=${encodeURIComponent(vodId)}&parent=${currentHost}&autoplay=true&muted=true&time=0h0m0s`;
+                        previewSrc = `https://player.twitch.tv/?video=${encodeURIComponent(vodId)}&parent=${currentHost}&autoplay=true&muted=${mutedParam}&time=0h0m0s`;
                     }
                 } else if (platform === 'kick') {
                     if (type === 'clips') {
                         const clipId = video.id;
-                        previewSrc = `https://player.kick.com/clips/${encodeURIComponent(clipId)}?autoplay=true&muted=true`;
+                        previewSrc = `https://player.kick.com/clips/${encodeURIComponent(clipId)}?autoplay=true&muted=${mutedParam}`;
                     } else {
                         const uuid = video.id;
-                        previewSrc = `https://player.kick.com/videos/${encodeURIComponent(uuid)}?autoplay=true&muted=true`;
+                        previewSrc = `https://player.kick.com/videos/${encodeURIComponent(uuid)}?autoplay=true&muted=${mutedParam}`;
                     }
                 }
 
@@ -564,18 +567,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewContainer = document.createElement('div');
                 previewContainer.className = 'channel-preview-container';
                 previewContainer.innerHTML = `
-                    <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Preview (5s)</div>
+                    <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Preview (15s)</div>
                     <iframe src="${previewSrc}" allow="autoplay; fullscreen" allowfullscreen="false"></iframe>
+                    <button type="button" class="channel-preview-vol-btn${channelPreviewMuted ? '' : ' unmuted'}" title="${channelPreviewMuted ? 'Turn on sound' : 'Mute sound'}">
+                        <i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>
+                    </button>
                     <div class="channel-preview-bar"></div>
                 `;
 
+                // Volume toggle button in bottom right
+                const volBtn = previewContainer.querySelector('.channel-preview-vol-btn');
+                if (volBtn) {
+                    volBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        channelPreviewMuted = !channelPreviewMuted;
+                        volBtn.classList.toggle('unmuted', !channelPreviewMuted);
+                        volBtn.title = channelPreviewMuted ? 'Turn on sound' : 'Mute sound';
+                        volBtn.innerHTML = `<i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>`;
+
+                        const iframe = previewContainer.querySelector('iframe');
+                        if (iframe && iframe.src) {
+                            iframe.src = iframe.src.replace(/muted=(true|false)/, `muted=${channelPreviewMuted ? 'true' : 'false'}`);
+                        }
+                    });
+                }
+
                 thumbElem.appendChild(previewContainer);
 
-                // Stop preview automatically after 5 seconds
+                // Stop preview automatically after 15 seconds
                 stopTimer = setTimeout(() => {
                     cleanupPreview();
-                }, 5000);
-            }, 220); // Small 220ms hover debounce to prevent accidental triggers
+                }, 15000);
+            }, 200); // 200ms hover debounce
         });
 
         thumbElem.addEventListener('mouseleave', () => {
@@ -585,6 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderChannelVideos(videos, username, append = false) {
         if (!channelVideosList) return;
+        channelVideosList.classList.remove('hidden');
 
         if (!append) {
             currentLoadedVideos = [...videos];
@@ -704,7 +729,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!username || username.length < 2) {
             setChannelStatus('');
-            if (channelVideosList) { channelVideosList.innerHTML = ''; }
+            if (channelVideosList) { channelVideosList.innerHTML = ''; channelVideosList.classList.add('hidden'); }
             if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
             if (channelMediaVaultPanel) channelMediaVaultPanel.classList.add('hidden');
             lastChannelQueryKey = '';
