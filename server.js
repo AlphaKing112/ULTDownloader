@@ -100,12 +100,17 @@ function fetchKickJson(apiUrl) {
     });
 }
 
-async function fetchKickChannelVideos(username, type) {
+async function fetchKickChannelVideos(username, type, range = 'all', cursor = null) {
     const slug = username.toLowerCase().replace(/_/g, '-');
     if (type === 'clips' || type === 'highlights') {
-        const data = await fetchKickJson(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/clips?sort=date&time=all`);
+        const kickTime = (range === '24h' || range === '24hr') ? '24h' : (range === '30d' ? '30d' : (range === '7d' ? '7d' : 'all'));
+        let apiUrl = `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/clips?sort=view&time=${kickTime}`;
+        if (cursor) {
+            apiUrl += `&cursor=${encodeURIComponent(cursor)}`;
+        }
+        const data = await fetchKickJson(apiUrl);
         const clips = Array.isArray(data?.clips) ? data.clips : [];
-        return clips.map(c => ({
+        const videos = clips.map(c => ({
             id: c.id,
             title: c.title || c.id,
             url: `https://kick.com/${c.channel?.slug || slug}/clips/${c.id}`,
@@ -114,10 +119,15 @@ async function fetchKickChannelVideos(username, type) {
             views: c.views ?? c.view_count ?? null,
             date: c.created_at || null
         }));
+        return {
+            videos,
+            nextCursor: data?.nextCursor ? (typeof data.nextCursor === 'object' ? JSON.stringify(data.nextCursor) : String(data.nextCursor)) : null,
+            hasMore: !!data?.nextCursor
+        };
     }
     const data = await fetchKickJson(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/videos`);
     const list = Array.isArray(data) ? data : [];
-    return list
+    const videos = list
         .filter(v => v && v.video && v.video.uuid && !v.is_live)
         .map(v => ({
             id: v.video.uuid,
@@ -128,15 +138,28 @@ async function fetchKickChannelVideos(username, type) {
             views: v.views ?? v.video.views ?? null,
             date: v.start_time || v.created_at || null
         }));
+    return {
+        videos,
+        hasMore: false
+    };
 }
 
-function fetchTwitchChannelVideos(username, type) {
-    const listUrl = type === 'clips'
-        ? `https://www.twitch.tv/${username}/clips?filter=clips&range=7d`
-        : `https://www.twitch.tv/${username}/videos?filter=${type === 'highlights' ? 'highlights' : 'archives'}&sort=time`;
+function fetchTwitchChannelVideos(username, type, range = 'all', page = 1) {
+    let listUrl;
+    if (type === 'clips') {
+        const twitchRange = (range === '24h' || range === '24hr') ? '24hr' : (range === '30d' ? '30d' : (range === '7d' ? '7d' : 'all'));
+        listUrl = `https://www.twitch.tv/${username}/clips?filter=clips&range=${twitchRange}`;
+    } else {
+        listUrl = `https://www.twitch.tv/${username}/videos?filter=${type === 'highlights' ? 'highlights' : 'archives'}&sort=time`;
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSize = 30;
+    const startIdx = (pageNum - 1) * pageSize + 1;
+    const endIdx = pageNum * pageSize;
 
     return new Promise((resolve, reject) => {
-        execFile('yt-dlp', ['--flat-playlist', '-J', '--playlist-end', '30', '--no-warnings', listUrl],
+        execFile('yt-dlp', ['--flat-playlist', '-J', '-I', `${startIdx}:${endIdx}`, '--no-warnings', listUrl],
             { maxBuffer: 1024 * 1024 * 20, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
                 if (error || !stdout || !stdout.trim()) {
                     return reject(new Error((stderr || error?.message || 'No data returned from Twitch').trim().split('\n').pop()));
@@ -144,7 +167,7 @@ function fetchTwitchChannelVideos(username, type) {
                 try {
                     const info = JSON.parse(stdout);
                     const entries = Array.isArray(info.entries) ? info.entries : [];
-                    resolve(entries.filter(e => e && e.url).map(e => ({
+                    const videos = entries.filter(e => e && e.url).map(e => ({
                         id: String(e.id || '').replace(/^v/, ''),
                         title: e.title || e.id,
                         url: e.url,
@@ -152,7 +175,12 @@ function fetchTwitchChannelVideos(username, type) {
                         duration: Number(e.duration) || 0,
                         views: e.view_count ?? null,
                         date: e.timestamp ? new Date(e.timestamp * 1000).toISOString() : null
-                    })));
+                    }));
+                    resolve({
+                        videos,
+                        page: pageNum,
+                        hasMore: videos.length === pageSize
+                    });
                 } catch (e) {
                     reject(new Error('Could not parse Twitch channel listing'));
                 }
@@ -273,6 +301,10 @@ const server = http.createServer((req, res) => {
         const platform = (parsedUrl.searchParams.get('platform') || '').toLowerCase();
         const username = (parsedUrl.searchParams.get('username') || '').trim().replace(/^@/, '');
         const type = (parsedUrl.searchParams.get('type') || 'vods').toLowerCase();
+        const range = (parsedUrl.searchParams.get('range') || 'all').toLowerCase();
+        const page = parseInt(parsedUrl.searchParams.get('page') || '1', 10) || 1;
+        const cursor = parsedUrl.searchParams.get('cursor') || null;
+
         const sendJson = (code, obj) => {
             res.writeHead(code, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(obj));
@@ -282,20 +314,33 @@ const server = http.createServer((req, res) => {
         if (!['vods', 'highlights', 'clips'].includes(type)) return sendJson(400, { success: false, error: 'type must be vods, highlights or clips' });
         if (!/^[A-Za-z0-9_-]{2,30}$/.test(username)) return sendJson(400, { success: false, error: 'Invalid username' });
 
-        const cacheKey = `${platform}:${username.toLowerCase()}:${type}`;
+        const cacheKey = `${platform}:${username.toLowerCase()}:${type}:${range}:${page}:${cursor || ''}`;
         const cached = channelVideosCache.get(cacheKey);
         if (cached && cached.expires > Date.now()) return sendJson(200, cached.data);
 
-        console.log(`[Server Channel Browser]: ${platform} / ${username} / ${type}`);
-        const loader = platform === 'kick' ? fetchKickChannelVideos(username, type) : fetchTwitchChannelVideos(username, type);
-        loader.then(videos => {
-            const data = { success: true, platform, username, type, videos };
+        console.log(`[Server Channel Browser]: ${platform} / ${username} / ${type} / range=${range} / page=${page}`);
+        const loader = platform === 'kick'
+            ? fetchKickChannelVideos(username, type, range, cursor)
+            : fetchTwitchChannelVideos(username, type, range, page);
+
+        loader.then(result => {
+            const data = {
+                success: true,
+                platform,
+                username,
+                type,
+                range,
+                videos: result.videos || [],
+                hasMore: !!result.hasMore,
+                page: result.page || page,
+                nextCursor: result.nextCursor || null
+            };
             channelVideosCache.set(cacheKey, { expires: Date.now() + CHANNEL_CACHE_MS, data });
             for (const [k, v] of channelVideosCache) if (v.expires < Date.now()) channelVideosCache.delete(k);
             sendJson(200, data);
         }).catch(err => {
             console.error(`[Server Channel Browser Error]: ${err.message}`);
-            sendJson(200, { success: false, platform, username, type, error: err.message });
+            sendJson(200, { success: false, platform, username, type, range, error: err.message });
         });
         return;
     }

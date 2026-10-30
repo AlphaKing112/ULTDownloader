@@ -178,27 +178,46 @@
                         <!-- Channel VOD Browser: type a Twitch/Kick username to pick a VOD/highlight -->
                         <div class="form-group channel-browser" id="channel-browser">
                             <div class="label-with-val">
-                                <label for="channel-username"><i class="fa-solid fa-user"></i> Find by Streamer Username</label>
+                                <label for="channel-username"><i class="fa-solid fa-user"></i> Find by Streamer Username (Twitch / Kick)</label>
                                 <span class="fetch-status-badge" id="channel-videos-status"></span>
                             </div>
-                            <div class="channel-toggle-row">
+                            <div class="channel-search-row">
                                 <div class="channel-toggle" id="channel-platform-toggle">
                                     <button type="button" class="channel-toggle-btn twitch active" data-platform="twitch"><i class="fa-brands fa-twitch"></i> Twitch</button>
                                     <button type="button" class="channel-toggle-btn kick" data-platform="kick"><i class="fa-solid fa-k"></i> Kick</button>
                                 </div>
-                                <div class="channel-toggle" id="channel-type-toggle">
-                                    <button type="button" class="channel-toggle-btn active" data-type="vods">VODs</button>
-                                    <button type="button" class="channel-toggle-btn" data-type="highlights" id="channel-type-highlights">Highlights</button>
-                                    <button type="button" class="channel-toggle-btn" data-type="clips">Clips</button>
+                                <div class="input-wrapper channel-input-wrapper">
+                                    <input type="text" id="channel-username" placeholder="Type a username (e.g. xqc) or paste channel link..." autocomplete="off" spellcheck="false">
+                                    <button type="button" class="btn-fetch-title" id="channel-search-btn" title="Load channel videos">
+                                        <i class="fa-solid fa-magnifying-glass"></i>
+                                    </button>
                                 </div>
                             </div>
-                            <div class="input-wrapper">
-                                <input type="text" id="channel-username" placeholder="Type a username, e.g. xqc..." autocomplete="off" spellcheck="false">
-                                <button type="button" class="btn-fetch-title" id="channel-search-btn" title="Load channel videos">
-                                    <i class="fa-solid fa-magnifying-glass"></i>
+
+                            <!-- Selections for VODs, Highlights and Clips (positioned under username input as tabs) -->
+                            <div class="channel-tabs-row" id="channel-tabs-row">
+                                <div class="channel-toggle channel-type-tabs" id="channel-type-toggle">
+                                    <button type="button" class="channel-toggle-btn active" data-type="vods"><i class="fa-solid fa-video"></i> VODs</button>
+                                    <button type="button" class="channel-toggle-btn" data-type="highlights" id="channel-type-highlights"><i class="fa-solid fa-star"></i> Highlights</button>
+                                    <button type="button" class="channel-toggle-btn" data-type="clips"><i class="fa-solid fa-scissors"></i> Clips</button>
+                                </div>
+                                <div class="channel-range-filter hidden" id="channel-range-filter">
+                                    <div class="channel-toggle channel-range-toggle" id="channel-range-toggle">
+                                        <button type="button" class="channel-range-btn active" data-range="all">All Time</button>
+                                        <button type="button" class="channel-range-btn" data-range="30d">30 Days</button>
+                                        <button type="button" class="channel-range-btn" data-range="7d">7 Days</button>
+                                        <button type="button" class="channel-range-btn" data-range="24h">24h</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="channel-videos-list hidden" id="channel-videos-list"></div>
+
+                            <div class="channel-load-more-row hidden" id="channel-load-more-row">
+                                <button type="button" class="channel-load-more-btn" id="channel-load-more-btn">
+                                    <i class="fa-solid fa-angles-down"></i> Load More Clips
                                 </button>
                             </div>
-                            <div class="channel-videos-list hidden" id="channel-videos-list"></div>
                         </div>
 
                         <div class="form-group">

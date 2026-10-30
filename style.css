@@ -1636,11 +1636,25 @@ input[type="number"] {
     gap: 8px;
 }
 
-.channel-toggle-row {
+.channel-search-row {
     display: flex;
-    flex-wrap: wrap;
     gap: 8px;
+    align-items: center;
+    width: 100%;
+}
+
+.channel-input-wrapper {
+    flex: 1;
+    min-width: 0;
+}
+
+.channel-tabs-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    padding-top: 2px;
 }
 
 .channel-toggle {
@@ -1674,6 +1688,29 @@ input[type="number"] {
 .channel-toggle-btn.kick.active { background: #53fc18; color: #0b0e0f; }
 .channel-toggle-btn.hidden { display: none; }
 
+.channel-range-filter {
+    display: inline-flex;
+    align-items: center;
+}
+
+.channel-range-filter.hidden { display: none; }
+
+.channel-range-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.channel-range-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.channel-range-btn.active { background: var(--accent-purple); color: #fff; }
+
 .channel-videos-list {
     display: flex;
     flex-direction: column;
@@ -1684,6 +1721,44 @@ input[type="number"] {
 }
 
 .channel-videos-list.hidden { display: none; }
+
+.channel-load-more-row {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    padding-top: 4px;
+}
+
+.channel-load-more-row.hidden { display: none; }
+
+.channel-load-more-btn {
+    width: 100%;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    background: var(--bg-input);
+    border: 1px dashed var(--accent-purple-light);
+    border-radius: var(--radius-sm);
+    color: var(--accent-purple-light);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.2s;
+}
+
+.channel-load-more-btn:hover {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: var(--accent-purple);
+    color: #fff;
+}
+
+.channel-load-more-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
 
 .channel-video-item {
     display: flex;

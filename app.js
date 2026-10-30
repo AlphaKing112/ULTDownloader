@@ -402,9 +402,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const channelPlatformToggle = document.getElementById('channel-platform-toggle');
     const channelTypeToggle = document.getElementById('channel-type-toggle');
     const channelHighlightsBtn = document.getElementById('channel-type-highlights');
+    const channelRangeFilter = document.getElementById('channel-range-filter');
+    const channelRangeToggle = document.getElementById('channel-range-toggle');
+    const channelLoadMoreRow = document.getElementById('channel-load-more-row');
+    const channelLoadMoreBtn = document.getElementById('channel-load-more-btn');
 
     let channelPlatform = 'twitch';
     let channelType = 'vods';
+    let channelRange = 'all'; // Default to all time
+    let channelPage = 1;
+    let channelCursor = null;
+    let channelHasMore = false;
+    let currentLoadedVideos = [];
+    let isLoadingMore = false;
     let channelRequestSeq = 0;
     let channelDebounceTimer = null;
     let lastChannelQueryKey = '';
@@ -417,7 +427,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setActiveToggle(container, attr, value) {
         if (!container) return;
-        container.querySelectorAll('.channel-toggle-btn').forEach(btn => {
+        container.querySelectorAll('button').forEach(btn => {
             btn.classList.toggle('active', btn.getAttribute(attr) === value);
         });
     }
@@ -461,46 +471,97 @@ document.addEventListener('DOMContentLoaded', () => {
         setActiveToggle(channelPlatformToggle, 'data-platform', platform);
         // Kick has no "highlights" concept - its equivalent is clips
         if (channelHighlightsBtn) channelHighlightsBtn.classList.toggle('hidden', platform === 'kick');
-        if (platform === 'kick' && channelType === 'highlights') selectChannelType('clips', false);
+        if (platform === 'kick' && channelType === 'highlights') {
+            selectChannelType('clips', false);
+        }
+        channelPage = 1;
+        channelCursor = null;
+        currentLoadedVideos = [];
         if (reload) loadChannelVideos(true);
     }
 
     function selectChannelType(type, reload = true) {
         channelType = type;
         setActiveToggle(channelTypeToggle, 'data-type', type);
+        // Show range filter only for clips
+        if (channelRangeFilter) {
+            channelRangeFilter.classList.toggle('hidden', type !== 'clips');
+        }
+        channelPage = 1;
+        channelCursor = null;
+        currentLoadedVideos = [];
         if (reload) loadChannelVideos(true);
     }
 
-    function renderChannelVideos(videos, username) {
+    function selectChannelRange(range, reload = true) {
+        channelRange = range;
+        setActiveToggle(channelRangeToggle, 'data-range', range);
+        channelPage = 1;
+        channelCursor = null;
+        currentLoadedVideos = [];
+        if (reload) loadChannelVideos(true);
+    }
+
+    function renderChannelVideos(videos, username, append = false) {
         if (!channelVideosList) return;
         channelVideosList.classList.remove('hidden');
-        if (!videos.length) {
-            const label = channelType === 'vods' ? 'VODs' : channelType;
-            channelVideosList.innerHTML = `<div class="channel-videos-empty">No ${escapeHtml(label)} found for <strong>${escapeHtml(username)}</strong> on ${channelPlatform === 'kick' ? 'Kick' : 'Twitch'}.</div>`;
-            return;
+
+        if (!append) {
+            currentLoadedVideos = [...videos];
+            if (!videos.length) {
+                const label = channelType === 'vods' ? 'VODs' : channelType;
+                channelVideosList.innerHTML = `<div class="channel-videos-empty">No ${escapeHtml(label)} found for <strong>${escapeHtml(username)}</strong> on ${channelPlatform === 'kick' ? 'Kick' : 'Twitch'}.</div>`;
+                if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
+                return;
+            }
+            channelVideosList.innerHTML = '';
+        } else {
+            currentLoadedVideos.push(...videos);
         }
+
         const currentUrl = sectionUrlInput ? sectionUrlInput.value.trim() : '';
-        channelVideosList.innerHTML = videos.map((v, i) => {
+        const startIndex = append ? currentLoadedVideos.length - videos.length : 0;
+
+        const fragment = document.createDocumentFragment();
+        videos.forEach((v, idx) => {
+            const globalIndex = startIndex + idx;
             const meta = [formatRelativeDate(v.date), formatViews(v.views)].filter(Boolean).join(' • ');
             const thumb = v.thumbnail
                 ? `<img src="${escapeAttr(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`
                 : '';
-            return `<button type="button" class="channel-video-item${v.url === currentUrl ? ' selected' : ''}" data-index="${i}" title="${escapeAttr(v.title)}">
-                        <span class="channel-video-thumb">${thumb}<span class="channel-video-duration">${formatSecondsToHHMMSS(v.duration)}</span></span>
-                        <span class="channel-video-info">
-                            <span class="channel-video-title">${escapeHtml(v.title || 'Untitled')}</span>
-                            <span class="channel-video-meta">${escapeHtml(meta)}</span>
-                        </span>
-                    </button>`;
-        }).join('');
 
-        channelVideosList.querySelectorAll('.channel-video-item').forEach(btn => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = `channel-video-item${v.url === currentUrl ? ' selected' : ''}`;
+            btn.dataset.index = globalIndex;
+            btn.title = v.title || '';
+            btn.innerHTML = `
+                <span class="channel-video-thumb">${thumb}<span class="channel-video-duration">${formatSecondsToHHMMSS(v.duration)}</span></span>
+                <span class="channel-video-info">
+                    <span class="channel-video-title">${escapeHtml(v.title || 'Untitled')}</span>
+                    <span class="channel-video-meta">${escapeHtml(meta)}</span>
+                </span>`;
+
             btn.addEventListener('click', () => {
                 channelVideosList.querySelectorAll('.channel-video-item').forEach(b => b.classList.remove('selected'));
                 btn.classList.add('selected');
-                selectChannelVideo(videos[Number(btn.dataset.index)]);
+                selectChannelVideo(currentLoadedVideos[globalIndex]);
             });
+
+            fragment.appendChild(btn);
         });
+
+        channelVideosList.appendChild(fragment);
+
+        // Update Load More button visibility
+        if (channelLoadMoreRow && channelLoadMoreBtn) {
+            if (channelHasMore) {
+                channelLoadMoreRow.classList.remove('hidden');
+                channelLoadMoreBtn.innerHTML = `<i class="fa-solid fa-angles-down"></i> Load More ${channelType === 'clips' ? 'Clips' : 'Videos'}`;
+            } else {
+                channelLoadMoreRow.classList.add('hidden');
+            }
+        }
     }
 
     function selectChannelVideo(video) {
@@ -545,7 +606,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!username || username.length < 2) {
             setChannelStatus('');
             if (channelVideosList) { channelVideosList.innerHTML = ''; channelVideosList.classList.add('hidden'); }
+            if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
             lastChannelQueryKey = '';
+            currentLoadedVideos = [];
+            channelHasMore = false;
             return;
         }
         if (!/^[A-Za-z0-9_-]{2,30}$/.test(username)) {
@@ -553,17 +617,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const queryKey = `${channelPlatform}:${username.toLowerCase()}:${channelType}`;
+        const queryKey = `${channelPlatform}:${username.toLowerCase()}:${channelType}:${channelRange}`;
         if (!force && queryKey === lastChannelQueryKey) return;
         lastChannelQueryKey = queryKey;
 
+        channelPage = 1;
+        channelCursor = null;
+        channelHasMore = false;
+
         const seq = ++channelRequestSeq;
         const platformLabel = channelPlatform === 'kick' ? 'Kick' : 'Twitch';
-        setChannelStatus(`⚡ Loading ${username}'s ${channelType} from ${platformLabel}...`, 'loading');
+        const rangeText = (channelType === 'clips' && channelRange !== 'all') ? ` (${channelRange})` : '';
+        setChannelStatus(`⚡ Loading ${username}'s ${channelType}${rangeText} from ${platformLabel}...`, 'loading');
         if (channelSearchBtn) channelSearchBtn.classList.add('fetching');
 
         try {
-            const params = new URLSearchParams({ platform: channelPlatform, username, type: channelType });
+            const params = new URLSearchParams({
+                platform: channelPlatform,
+                username,
+                type: channelType,
+                range: channelRange,
+                page: '1'
+            });
             const res = await fetch(`/api/channel-videos?${params.toString()}`);
             const data = await res.json();
             if (seq !== channelRequestSeq) return; // a newer search superseded this one
@@ -575,18 +650,77 @@ document.addEventListener('DOMContentLoaded', () => {
                     channelVideosList.classList.remove('hidden');
                     channelVideosList.innerHTML = `<div class="channel-videos-empty">${escapeHtml(data.error || 'Could not load channel videos.')}</div>`;
                 }
+                if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
                 return;
             }
 
             const videos = Array.isArray(data.videos) ? data.videos : [];
+            channelHasMore = !!data.hasMore;
+            channelCursor = data.nextCursor || null;
+            channelPage = data.page || 1;
+
             setChannelStatus(videos.length ? `✓ ${videos.length} found — click one to load` : 'Nothing found', videos.length ? 'success' : '');
-            renderChannelVideos(videos, username);
+            renderChannelVideos(videos, username, false);
         } catch (err) {
             if (seq !== channelRequestSeq) return;
             lastChannelQueryKey = '';
             setChannelStatus('Backend server unreachable', 'error');
         } finally {
             if (seq === channelRequestSeq && channelSearchBtn) channelSearchBtn.classList.remove('fetching');
+        }
+    }
+
+    async function loadMoreChannelVideos() {
+        if (isLoadingMore || !channelHasMore || !channelUsernameInput) return;
+        const username = normalizeChannelInput(channelUsernameInput.value);
+        if (!username) return;
+
+        isLoadingMore = true;
+        if (channelLoadMoreBtn) {
+            channelLoadMoreBtn.disabled = true;
+            channelLoadMoreBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Loading more...`;
+        }
+        setChannelStatus(`⚡ Loading more ${channelType}...`, 'loading');
+
+        try {
+            const nextPage = channelPage + 1;
+            const params = new URLSearchParams({
+                platform: channelPlatform,
+                username,
+                type: channelType,
+                range: channelRange,
+                page: String(nextPage)
+            });
+            if (channelCursor) {
+                params.set('cursor', channelCursor);
+            }
+
+            const res = await fetch(`/api/channel-videos?${params.toString()}`);
+            const data = await res.json();
+
+            if (!data.success || !Array.isArray(data.videos) || data.videos.length === 0) {
+                channelHasMore = false;
+                if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
+                setChannelStatus(`✓ All ${currentLoadedVideos.length} loaded`, 'success');
+                return;
+            }
+
+            channelPage = data.page || nextPage;
+            channelHasMore = !!data.hasMore;
+            channelCursor = data.nextCursor || null;
+
+            renderChannelVideos(data.videos, username, true);
+            setChannelStatus(`✓ ${currentLoadedVideos.length} loaded — click one to load`, 'success');
+            logToConsole(`[Channel Browser] Loaded +${data.videos.length} more ${channelType} (${currentLoadedVideos.length} total)`, 'info');
+        } catch (e) {
+            console.error('Error loading more videos:', e);
+            setChannelStatus('Failed to load more items', 'error');
+        } finally {
+            isLoadingMore = false;
+            if (channelLoadMoreBtn) {
+                channelLoadMoreBtn.disabled = false;
+                channelLoadMoreBtn.innerHTML = `<i class="fa-solid fa-angles-down"></i> Load More ${channelType === 'clips' ? 'Clips' : 'Videos'}`;
+            }
         }
     }
 
@@ -617,6 +751,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (channelTypeToggle) {
         channelTypeToggle.querySelectorAll('.channel-toggle-btn').forEach(btn => {
             btn.addEventListener('click', () => selectChannelType(btn.getAttribute('data-type')));
+        });
+    }
+    if (channelRangeToggle) {
+        channelRangeToggle.querySelectorAll('.channel-range-btn').forEach(btn => {
+            btn.addEventListener('click', () => selectChannelRange(btn.getAttribute('data-range')));
+        });
+    }
+    if (channelLoadMoreBtn) {
+        channelLoadMoreBtn.addEventListener('click', () => {
+            loadMoreChannelVideos();
         });
     }
 
