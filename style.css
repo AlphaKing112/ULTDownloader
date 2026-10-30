@@ -1849,9 +1849,20 @@ input[type="number"] {
     overflow: hidden;
 }
 
+.channel-preview-scaler {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 640px;
+    height: 360px;
+    transform-origin: top left;
+    pointer-events: none;
+}
+
+.channel-preview-scaler iframe,
 .channel-preview-container iframe {
-    width: 100%;
-    height: 100%;
+    width: 640px;
+    height: 360px;
     border: none;
     pointer-events: none;
     display: block;

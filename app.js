@@ -540,17 +540,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
             hoverTimer = setTimeout(() => {
                 const currentHost = window.location.hostname || 'localhost';
+                let parentParams = '&parent=localhost&parent=127.0.0.1';
+                if (currentHost && currentHost !== 'localhost' && currentHost !== '127.0.0.1') {
+                    parentParams += `&parent=${encodeURIComponent(currentHost)}`;
+                }
+
                 let previewSrc = '';
                 const mutedParam = channelPreviewMuted ? 'true' : 'false';
 
                 if (platform === 'twitch') {
-                    const clipMatch = video.url.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
+                    const clipMatch = (video.url || '').match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
                     if (type === 'clips' || clipMatch) {
                         const clipId = (clipMatch && clipMatch[1]) ? clipMatch[1] : video.id;
-                        previewSrc = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}&parent=${currentHost}&autoplay=true&muted=${mutedParam}`;
+                        previewSrc = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}${parentParams}&autoplay=true&muted=${mutedParam}`;
                     } else {
-                        const vodId = String(video.id).replace(/^v/, '');
-                        previewSrc = `https://player.twitch.tv/?video=${encodeURIComponent(vodId)}&parent=${currentHost}&autoplay=true&muted=${mutedParam}&time=0h0m0s`;
+                        const vodMatch = (video.url || '').match(/twitch\.tv\/videos\/(\d+)/i);
+                        const rawId = (vodMatch && vodMatch[1]) ? vodMatch[1] : (video.id || '');
+                        const vodId = 'v' + String(rawId).replace(/^v/, '');
+                        previewSrc = `https://player.twitch.tv/?video=${encodeURIComponent(vodId)}${parentParams}&autoplay=true&muted=${mutedParam}&time=0h0m0s`;
                     }
                 } else if (platform === 'kick') {
                     if (type === 'clips') {
@@ -564,11 +571,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (!previewSrc) return;
 
+                const thumbRect = thumbElem.getBoundingClientRect();
+                const thumbWidth = thumbRect.width || thumbElem.clientWidth || 280;
+                const scale = (thumbWidth / 640).toFixed(4);
+
                 previewContainer = document.createElement('div');
                 previewContainer.className = 'channel-preview-container';
                 previewContainer.innerHTML = `
                     <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Preview (15s)</div>
-                    <iframe src="${previewSrc}" allow="autoplay; fullscreen" allowfullscreen="false"></iframe>
+                    <div class="channel-preview-scaler" style="transform: scale(${scale});">
+                        <iframe src="${previewSrc}" width="640" height="360" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen="false"></iframe>
+                    </div>
                     <button type="button" class="channel-preview-vol-btn${channelPreviewMuted ? '' : ' unmuted'}" title="${channelPreviewMuted ? 'Turn on sound' : 'Mute sound'}">
                         <i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>
                     </button>
@@ -588,7 +601,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         const iframe = previewContainer.querySelector('iframe');
                         if (iframe && iframe.src) {
-                            iframe.src = iframe.src.replace(/muted=(true|false)/, `muted=${channelPreviewMuted ? 'true' : 'false'}`);
+                            iframe.src = iframe.src.replace(/muted=(true|false)/gi, `muted=${channelPreviewMuted ? 'true' : 'false'}`);
+                        }
+
+                        // Reset 15s timer & progress bar on volume click so user gets full 15s with sound
+                        if (stopTimer) {
+                            clearTimeout(stopTimer);
+                            stopTimer = setTimeout(() => {
+                                cleanupPreview();
+                            }, 15000);
+                        }
+                        const bar = previewContainer.querySelector('.channel-preview-bar');
+                        if (bar) {
+                            bar.style.animation = 'none';
+                            void bar.offsetWidth; // trigger reflow
+                            bar.style.animation = 'previewProgress 15s linear forwards';
                         }
                     });
                 }
