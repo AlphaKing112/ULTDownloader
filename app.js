@@ -406,6 +406,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const channelRangeToggle = document.getElementById('channel-range-toggle');
     const channelLoadMoreRow = document.getElementById('channel-load-more-row');
     const channelLoadMoreBtn = document.getElementById('channel-load-more-btn');
+    const channelMediaVaultPanel = document.getElementById('channel-media-vault-panel');
+    const channelVaultTitle = document.getElementById('channel-vault-title');
+    const vaultCountBadge = document.getElementById('vault-count-badge');
+
+    window.closeChannelVaultPanel = function() {
+        if (channelMediaVaultPanel) {
+            channelMediaVaultPanel.classList.add('hidden');
+        }
+    };
 
     let channelPlatform = 'twitch';
     let channelType = 'vods';
@@ -502,9 +511,80 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reload) loadChannelVideos(true);
     }
 
+    function setupThumbnailHoverPreview(thumbElem, video, platform, type) {
+        if (!thumbElem || !video) return;
+
+        let hoverTimer = null;
+        let stopTimer = null;
+        let previewContainer = null;
+
+        function cleanupPreview() {
+            if (hoverTimer) {
+                clearTimeout(hoverTimer);
+                hoverTimer = null;
+            }
+            if (stopTimer) {
+                clearTimeout(stopTimer);
+                stopTimer = null;
+            }
+            if (previewContainer && previewContainer.parentNode) {
+                previewContainer.remove();
+                previewContainer = null;
+            }
+        }
+
+        thumbElem.addEventListener('mouseenter', () => {
+            cleanupPreview();
+
+            hoverTimer = setTimeout(() => {
+                const currentHost = window.location.hostname || 'localhost';
+                let previewSrc = '';
+
+                if (platform === 'twitch') {
+                    const clipMatch = video.url.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
+                    if (type === 'clips' || clipMatch) {
+                        const clipId = (clipMatch && clipMatch[1]) ? clipMatch[1] : video.id;
+                        previewSrc = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}&parent=${currentHost}&autoplay=true&muted=true`;
+                    } else {
+                        const vodId = String(video.id).replace(/^v/, '');
+                        previewSrc = `https://player.twitch.tv/?video=${encodeURIComponent(vodId)}&parent=${currentHost}&autoplay=true&muted=true&time=0h0m0s`;
+                    }
+                } else if (platform === 'kick') {
+                    if (type === 'clips') {
+                        const clipId = video.id;
+                        previewSrc = `https://player.kick.com/clips/${encodeURIComponent(clipId)}?autoplay=true&muted=true`;
+                    } else {
+                        const uuid = video.id;
+                        previewSrc = `https://player.kick.com/videos/${encodeURIComponent(uuid)}?autoplay=true&muted=true`;
+                    }
+                }
+
+                if (!previewSrc) return;
+
+                previewContainer = document.createElement('div');
+                previewContainer.className = 'channel-preview-container';
+                previewContainer.innerHTML = `
+                    <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Preview (5s)</div>
+                    <iframe src="${previewSrc}" allow="autoplay; fullscreen" allowfullscreen="false"></iframe>
+                    <div class="channel-preview-bar"></div>
+                `;
+
+                thumbElem.appendChild(previewContainer);
+
+                // Stop preview automatically after 5 seconds
+                stopTimer = setTimeout(() => {
+                    cleanupPreview();
+                }, 5000);
+            }, 220); // Small 220ms hover debounce to prevent accidental triggers
+        });
+
+        thumbElem.addEventListener('mouseleave', () => {
+            cleanupPreview();
+        });
+    }
+
     function renderChannelVideos(videos, username, append = false) {
         if (!channelVideosList) return;
-        channelVideosList.classList.remove('hidden');
 
         if (!append) {
             currentLoadedVideos = [...videos];
@@ -512,6 +592,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const label = channelType === 'vods' ? 'VODs' : channelType;
                 channelVideosList.innerHTML = `<div class="channel-videos-empty">No ${escapeHtml(label)} found for <strong>${escapeHtml(username)}</strong> on ${channelPlatform === 'kick' ? 'Kick' : 'Twitch'}.</div>`;
                 if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
+                if (channelMediaVaultPanel) channelMediaVaultPanel.classList.remove('hidden');
+                if (vaultCountBadge) vaultCountBadge.textContent = '0 items';
                 return;
             }
             channelVideosList.innerHTML = '';
@@ -542,6 +624,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="channel-video-meta">${escapeHtml(meta)}</span>
                 </span>`;
 
+            const thumbSpan = btn.querySelector('.channel-video-thumb');
+            setupThumbnailHoverPreview(thumbSpan, v, channelPlatform, channelType);
+
             btn.addEventListener('click', () => {
                 channelVideosList.querySelectorAll('.channel-video-item').forEach(b => b.classList.remove('selected'));
                 btn.classList.add('selected');
@@ -552,6 +637,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         channelVideosList.appendChild(fragment);
+
+        // Show and update Streamer Media Vault Panel below CLI Output
+        if (channelMediaVaultPanel) {
+            channelMediaVaultPanel.classList.remove('hidden');
+            if (channelVaultTitle) {
+                const platformLabel = channelPlatform === 'kick' ? 'Kick' : 'Twitch';
+                const typeLabel = channelType === 'vods' ? 'VODs' : (channelType === 'highlights' ? 'Highlights' : 'Clips');
+                const rangeLabel = (channelType === 'clips' && channelRange !== 'all') ? ` - ${channelRange}` : '';
+                channelVaultTitle.textContent = `${username}'s ${typeLabel} (${platformLabel}${rangeLabel})`;
+            }
+            if (vaultCountBadge) {
+                vaultCountBadge.textContent = `${currentLoadedVideos.length} items`;
+            }
+        }
 
         // Update Load More button visibility
         if (channelLoadMoreRow && channelLoadMoreBtn) {
@@ -605,8 +704,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!username || username.length < 2) {
             setChannelStatus('');
-            if (channelVideosList) { channelVideosList.innerHTML = ''; channelVideosList.classList.add('hidden'); }
+            if (channelVideosList) { channelVideosList.innerHTML = ''; }
             if (channelLoadMoreRow) channelLoadMoreRow.classList.add('hidden');
+            if (channelMediaVaultPanel) channelMediaVaultPanel.classList.add('hidden');
             lastChannelQueryKey = '';
             currentLoadedVideos = [];
             channelHasMore = false;

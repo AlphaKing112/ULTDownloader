@@ -177,9 +177,11 @@
 
                         <!-- Channel VOD Browser: type a Twitch/Kick username to pick a VOD/highlight -->
                         <div class="form-group channel-browser" id="channel-browser">
-                            <div class="label-with-val">
+                            <div class="channel-header-block">
                                 <label for="channel-username"><i class="fa-solid fa-user"></i> Find by Streamer Username (Twitch / Kick)</label>
-                                <span class="fetch-status-badge" id="channel-videos-status"></span>
+                                <div class="channel-status-line">
+                                    <span class="fetch-status-badge" id="channel-videos-status"></span>
+                                </div>
                             </div>
                             <div class="channel-search-row">
                                 <div class="channel-toggle" id="channel-platform-toggle">
@@ -209,14 +211,6 @@
                                         <button type="button" class="channel-range-btn" data-range="24h">24h</button>
                                     </div>
                                 </div>
-                            </div>
-
-                            <div class="channel-videos-list hidden" id="channel-videos-list"></div>
-
-                            <div class="channel-load-more-row hidden" id="channel-load-more-row">
-                                <button type="button" class="channel-load-more-btn" id="channel-load-more-btn">
-                                    <i class="fa-solid fa-angles-down"></i> Load More Clips
-                                </button>
                             </div>
                         </div>
 
@@ -715,6 +709,37 @@
                             <code id="generated-cli-code">yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 ...</code>
                             <button class="btn-icon-copy" title="Copy CLI Command" onclick="copyCliCommand()">
                                 <i class="fa-regular fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Streamer Media Vault Panel (Positioned below CLI Output & Live Stream) -->
+                <section class="panel channel-media-vault-panel hidden" id="channel-media-vault-panel">
+                    <div class="panel-header">
+                        <div class="header-title-group">
+                            <i class="fa-solid fa-photo-film header-icon" id="vault-panel-icon"></i>
+                            <h2 id="channel-vault-title">Streamer Media Vault (VODs & Clips)</h2>
+                        </div>
+                        <div class="vault-header-actions">
+                            <span class="vault-count-badge" id="vault-count-badge">0 items</span>
+                            <button type="button" class="btn-icon" onclick="closeChannelVaultPanel()" title="Close Media Vault">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="channel-vault-body">
+                        <div class="vault-hint">
+                            <i class="fa-solid fa-circle-play" style="color: #ef4444;"></i>
+                            <span><strong>Live 5s Preview:</strong> Hover over any thumbnail with your mouse to preview. Click any item to load it into the Section Clipper!</span>
+                        </div>
+
+                        <div class="channel-videos-list" id="channel-videos-list"></div>
+
+                        <div class="channel-load-more-row hidden" id="channel-load-more-row">
+                            <button type="button" class="channel-load-more-btn" id="channel-load-more-btn">
+                                <i class="fa-solid fa-angles-down"></i> Load More Clips
                             </button>
                         </div>
                     </div>
