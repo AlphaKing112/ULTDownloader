@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { exec, execFile } = require('child_process');
@@ -145,46 +146,176 @@ async function fetchKickChannelVideos(username, type, range = 'all', cursor = nu
 }
 
 function fetchTwitchChannelVideos(username, type, range = 'all', page = 1) {
-    let listUrl;
-    if (type === 'clips') {
-        const twitchRange = (range === '24h' || range === '24hr') ? '24hr' : (range === '30d' ? '30d' : (range === '7d' ? '7d' : 'all'));
-        listUrl = `https://www.twitch.tv/${username}/clips?filter=clips&range=${twitchRange}`;
-    } else {
-        listUrl = `https://www.twitch.tv/${username}/videos?filter=${type === 'highlights' ? 'highlights' : 'archives'}&sort=time`;
-    }
-
+    const cleanUser = String(username || '').toLowerCase().trim().replace(/^@/, '');
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const pageSize = 30;
-    const startIdx = (pageNum - 1) * pageSize + 1;
-    const endIdx = pageNum * pageSize;
 
     return new Promise((resolve, reject) => {
-        execFile('yt-dlp', ['--flat-playlist', '-J', '-I', `${startIdx}:${endIdx}`, '--no-warnings', listUrl],
-            { maxBuffer: 1024 * 1024 * 20, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
-                if (error || !stdout || !stdout.trim()) {
-                    return reject(new Error((stderr || error?.message || 'No data returned from Twitch').trim().split('\n').pop()));
+        let queryBody = '';
+
+        if (type === 'clips') {
+            let filter = 'ALL_TIME';
+            if (range === '24h' || range === '24hr') filter = 'LAST_DAY';
+            else if (range === '7d') filter = 'LAST_WEEK';
+            else if (range === '30d') filter = 'LAST_MONTH';
+
+            queryBody = `query {
+              user(login: "${cleanUser}") {
+                id
+                login
+                displayName
+                clips(first: 60, criteria: { filter: ${filter} }) {
+                  edges {
+                    node {
+                      id
+                      slug
+                      title
+                      durationSeconds
+                      viewCount
+                      createdAt
+                      thumbnailURL
+                      url
+                    }
+                  }
+                  pageInfo { hasNextPage }
+                }
+              }
+            }`;
+        } else {
+            const videoType = type === 'highlights' ? 'HIGHLIGHT' : 'ARCHIVE';
+            queryBody = `query {
+              user(login: "${cleanUser}") {
+                id
+                login
+                displayName
+                videos(first: 60, type: ${videoType}) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      title
+                      lengthSeconds
+                      viewCount
+                      createdAt
+                      previewThumbnailURL(width: 320, height: 180)
+                    }
+                  }
+                  pageInfo { hasNextPage }
+                }
+              }
+            }`;
+        }
+
+        const payload = JSON.stringify({ query: queryBody });
+        const req = https.request('https://gql.twitch.tv/gql', {
+            method: 'POST',
+            headers: {
+                'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            timeout: 10000
+        }, res => {
+            let body = '';
+            res.on('data', d => body += d);
+            res.on('end', () => {
+                if (res.statusCode !== 200) {
+                    return fallbackYtDlp();
                 }
                 try {
-                    const info = JSON.parse(stdout);
-                    const entries = Array.isArray(info.entries) ? info.entries : [];
-                    const videos = entries.filter(e => e && e.url).map(e => ({
-                        id: String(e.id || '').replace(/^v/, ''),
-                        title: e.title || e.id,
-                        url: e.url,
-                        thumbnail: e.thumbnail || '',
-                        duration: Number(e.duration) || 0,
-                        views: e.view_count ?? null,
-                        date: e.timestamp ? new Date(e.timestamp * 1000).toISOString() : null
-                    }));
-                    resolve({
-                        videos,
-                        page: pageNum,
-                        hasMore: videos.length === pageSize
-                    });
+                    const parsed = JSON.parse(body);
+                    const user = parsed?.data?.user;
+                    if (!user) {
+                        return reject(new Error(`Streamer "${username}" was not found on Twitch`));
+                    }
+
+                    if (type === 'clips') {
+                        const edges = user.clips?.edges || [];
+                        const videos = edges.map(e => ({
+                            id: e.node.slug || e.node.id,
+                            title: e.node.title || 'Untitled Clip',
+                            url: e.node.url || `https://clips.twitch.tv/${e.node.slug}`,
+                            thumbnail: e.node.thumbnailURL || '',
+                            duration: Number(e.node.durationSeconds) || 0,
+                            views: e.node.viewCount ?? null,
+                            date: e.node.createdAt || null
+                        }));
+                        return resolve({
+                            videos,
+                            page: pageNum,
+                            hasMore: !!user.clips?.pageInfo?.hasNextPage
+                        });
+                    } else {
+                        const edges = user.videos?.edges || [];
+                        const videos = edges.map(e => ({
+                            id: String(e.node.id),
+                            title: e.node.title || `VOD ${e.node.id}`,
+                            url: `https://www.twitch.tv/videos/${e.node.id}`,
+                            thumbnail: e.node.previewThumbnailURL || '',
+                            duration: Number(e.node.lengthSeconds) || 0,
+                            views: e.node.viewCount ?? null,
+                            date: e.node.createdAt || null
+                        }));
+                        return resolve({
+                            videos,
+                            page: pageNum,
+                            hasMore: !!user.videos?.pageInfo?.hasNextPage
+                        });
+                    }
                 } catch (e) {
-                    reject(new Error('Could not parse Twitch channel listing'));
+                    fallbackYtDlp();
                 }
             });
+        });
+
+        req.on('error', () => fallbackYtDlp());
+        req.on('timeout', () => {
+            req.destroy();
+            fallbackYtDlp();
+        });
+        req.write(payload);
+        req.end();
+
+        function fallbackYtDlp() {
+            let listUrl;
+            if (type === 'clips') {
+                const twitchRange = (range === '24h' || range === '24hr') ? '24hr' : (range === '30d' ? '30d' : (range === '7d' ? '7d' : 'all'));
+                listUrl = `https://www.twitch.tv/${username}/clips?filter=clips&range=${twitchRange}`;
+            } else {
+                listUrl = `https://www.twitch.tv/${username}/videos?filter=${type === 'highlights' ? 'highlights' : 'archives'}&sort=time`;
+            }
+
+            const startIdx = (pageNum - 1) * pageSize + 1;
+            const endIdx = pageNum * pageSize;
+
+            execFile('yt-dlp', ['--flat-playlist', '-J', '-I', `${startIdx}:${endIdx}`, '--no-warnings', listUrl],
+                { maxBuffer: 1024 * 1024 * 20, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
+                    if (error || !stdout || !stdout.trim()) {
+                        return reject(new Error((stderr || error?.message || `No data returned from Twitch for ${username}`).trim().split('\n').pop()));
+                    }
+                    try {
+                        const info = JSON.parse(stdout);
+                        const entries = Array.isArray(info.entries) ? info.entries : [];
+                        const videos = entries.filter(e => e && e.url).map(e => ({
+                            id: String(e.id || '').replace(/^v/, ''),
+                            title: e.title || e.id,
+                            url: e.url,
+                            thumbnail: e.thumbnail || '',
+                            duration: Number(e.duration) || 0,
+                            views: e.view_count ?? null,
+                            date: e.timestamp ? new Date(e.timestamp * 1000).toISOString() : null
+                        }));
+                        resolve({
+                            videos,
+                            page: pageNum,
+                            hasMore: videos.length === pageSize
+                        });
+                    } catch (e) {
+                        reject(new Error('Could not parse Twitch channel listing'));
+                    }
+                });
+        }
     });
 }
 

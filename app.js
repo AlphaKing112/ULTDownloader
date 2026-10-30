@@ -702,6 +702,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (vaultCountBadge) {
                 vaultCountBadge.textContent = `${currentLoadedVideos.length} items`;
             }
+            if (!append && videos.length) {
+                channelMediaVaultPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
         }
 
         // Update Load More button visibility
@@ -811,7 +814,8 @@ document.addEventListener('DOMContentLoaded', () => {
             channelCursor = data.nextCursor || null;
             channelPage = data.page || 1;
 
-            setChannelStatus(videos.length ? `✓ ${videos.length} found — click one to load` : 'Nothing found', videos.length ? 'success' : '');
+            const typeLabel = channelType === 'vods' ? 'VODs' : (channelType === 'highlights' ? 'Highlights' : 'Clips');
+            setChannelStatus(videos.length ? `✓ ${videos.length} ${typeLabel} loaded in vault below` : `No ${typeLabel} found`, videos.length ? 'success' : '');
             renderChannelVideos(videos, username, false);
         } catch (err) {
             if (seq !== channelRequestSeq) return;
@@ -879,7 +883,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (channelUsernameInput) {
         channelUsernameInput.addEventListener('input', () => {
             clearTimeout(channelDebounceTimer);
-            channelDebounceTimer = setTimeout(() => loadChannelVideos(false), 700);
+            channelDebounceTimer = setTimeout(() => loadChannelVideos(false), 400);
         });
         channelUsernameInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
