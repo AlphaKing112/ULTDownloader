@@ -145,137 +145,197 @@ async function fetchKickChannelVideos(username, type, range = 'all', cursor = nu
     };
 }
 
-function fetchTwitchChannelVideos(username, type, range = 'all', page = 1) {
+let twitchIntegrityCache = null;
+
+function getTwitchIntegrityHeaders() {
+    if (twitchIntegrityCache && twitchIntegrityCache.expires > Date.now()) {
+        return Promise.resolve(twitchIntegrityCache.headers);
+    }
+
+    return new Promise((resolve) => {
+        const deviceId = crypto.randomBytes(16).toString('hex');
+        const fallbackHeaders = {
+            'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+            'X-Device-Id': deviceId,
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        };
+
+        const req = https.request('https://gql.twitch.tv/integrity', {
+            method: 'POST',
+            headers: {
+                'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                'X-Device-Id': deviceId,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            timeout: 5000
+        }, res => {
+            let b = '';
+            res.on('data', d => b += d);
+            res.on('end', () => {
+                try {
+                    const data = JSON.parse(b);
+                    if (data && data.token) {
+                        const headers = {
+                            'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                            'Client-Integrity': data.token,
+                            'X-Device-Id': deviceId,
+                            'Content-Type': 'application/json',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        };
+                        const expires = (data.expiration && data.expiration > Date.now())
+                            ? data.expiration - 60000
+                            : Date.now() + 3600000;
+                        twitchIntegrityCache = { headers, expires };
+                        return resolve(headers);
+                    }
+                } catch (e) {}
+                resolve(fallbackHeaders);
+            });
+        });
+
+        req.on('error', () => resolve(fallbackHeaders));
+        req.on('timeout', () => { req.destroy(); resolve(fallbackHeaders); });
+        req.end();
+    });
+}
+
+async function fetchTwitchChannelVideos(username, type, range = 'all', page = 1) {
     const cleanUser = String(username || '').toLowerCase().trim().replace(/^@/, '');
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const pageSize = 30;
 
+    const headers = await getTwitchIntegrityHeaders();
+
     return new Promise((resolve, reject) => {
-        let queryBody = '';
+        function runGqlQuery(queryBody) {
+            return new Promise((resGql, rejGql) => {
+                const payload = JSON.stringify({ query: queryBody });
+                const req = https.request('https://gql.twitch.tv/gql', {
+                    method: 'POST',
+                    headers: Object.assign({}, headers, {
+                        'Content-Length': Buffer.byteLength(payload)
+                    }),
+                    timeout: 10000
+                }, res => {
+                    let b = '';
+                    res.on('data', d => b += d);
+                    res.on('end', () => {
+                        if (res.statusCode !== 200) return rejGql(new Error(`Twitch GQL HTTP ${res.statusCode}`));
+                        try {
+                            const data = JSON.parse(b);
+                            resGql(data);
+                        } catch (err) {
+                            rejGql(err);
+                        }
+                    });
+                });
+                req.on('error', rejGql);
+                req.on('timeout', () => { req.destroy(); rejGql(new Error('Twitch GQL timeout')); });
+                req.write(payload);
+                req.end();
+            });
+        }
 
-        if (type === 'clips') {
-            let filter = 'ALL_TIME';
-            if (range === '24h' || range === '24hr') filter = 'LAST_DAY';
-            else if (range === '7d') filter = 'LAST_WEEK';
-            else if (range === '30d') filter = 'LAST_MONTH';
+        async function executeGql() {
+            if (type === 'clips') {
+                let filter = 'ALL_TIME';
+                if (range === '24h' || range === '24hr') filter = 'LAST_DAY';
+                else if (range === '7d') filter = 'LAST_WEEK';
+                else if (range === '30d') filter = 'LAST_MONTH';
 
-            queryBody = `query {
-              user(login: "${cleanUser}") {
-                id
-                login
-                displayName
-                clips(first: 60, criteria: { filter: ${filter} }) {
-                  edges {
-                    node {
-                      id
-                      slug
-                      title
-                      durationSeconds
-                      viewCount
-                      createdAt
-                      thumbnailURL
-                      url
+                const query = `query {
+                  user(login: "${cleanUser}") {
+                    id login displayName
+                    clips(first: 60, criteria: { filter: ${filter} }) {
+                      edges {
+                        node { id slug title durationSeconds viewCount createdAt thumbnailURL url }
+                      }
+                      pageInfo { hasNextPage }
                     }
                   }
-                  pageInfo { hasNextPage }
+                }`;
+                const data = await runGqlQuery(query);
+                if (data.errors && (!data.data?.user || !data.data.user.clips)) {
+                    throw new Error('Twitch clips integrity failure');
                 }
-              }
-            }`;
-        } else {
+                const user = data.data?.user;
+                if (!user) throw new Error(`Streamer "${username}" was not found on Twitch`);
+
+                const edges = user.clips?.edges || [];
+                const videos = edges.map(e => ({
+                    id: e.node.slug || e.node.id,
+                    title: e.node.title || 'Untitled Clip',
+                    url: e.node.url || `https://clips.twitch.tv/${e.node.slug}`,
+                    thumbnail: e.node.thumbnailURL || '',
+                    duration: Number(e.node.durationSeconds) || 0,
+                    views: e.node.viewCount ?? null,
+                    date: e.node.createdAt || null
+                }));
+                return { videos, page: pageNum, hasMore: !!user.clips?.pageInfo?.hasNextPage };
+            }
+
+            // VODs (ARCHIVE) or Highlights (HIGHLIGHT)
             const videoType = type === 'highlights' ? 'HIGHLIGHT' : 'ARCHIVE';
-            queryBody = `query {
+            const query = `query {
               user(login: "${cleanUser}") {
-                id
-                login
-                displayName
+                id login displayName
                 videos(first: 60, type: ${videoType}) {
                   totalCount
                   edges {
-                    node {
-                      id
-                      title
-                      lengthSeconds
-                      viewCount
-                      createdAt
-                      previewThumbnailURL(width: 320, height: 180)
-                    }
+                    node { id title lengthSeconds viewCount createdAt previewThumbnailURL(width: 320, height: 180) }
                   }
                   pageInfo { hasNextPage }
                 }
               }
             }`;
+            const data = await runGqlQuery(query);
+
+            if (data.errors && (!data.data?.user || !data.data.user.videos)) {
+                throw new Error('Twitch videos integrity failure');
+            }
+            const user = data.data?.user;
+            if (!user) throw new Error(`Streamer "${username}" was not found on Twitch`);
+
+            let edges = user.videos?.edges || [];
+
+            // If VODs (ARCHIVE) returned 0 videos, check if the streamer has any general uploaded videos or broadcasts
+            if (type === 'vods' && edges.length === 0) {
+                try {
+                    const fallbackQuery = `query {
+                      user(login: "${cleanUser}") {
+                        videos(first: 60) {
+                          edges {
+                            node { id title lengthSeconds viewCount createdAt previewThumbnailURL(width: 320, height: 180) }
+                          }
+                          pageInfo { hasNextPage }
+                        }
+                      }
+                    }`;
+                    const fbData = await runGqlQuery(fallbackQuery);
+                    if (fbData?.data?.user?.videos?.edges?.length) {
+                        edges = fbData.data.user.videos.edges;
+                    }
+                } catch (fbErr) {}
+            }
+
+            const videos = edges.map(e => ({
+                id: String(e.node.id),
+                title: e.node.title || `VOD ${e.node.id}`,
+                url: `https://www.twitch.tv/videos/${e.node.id}`,
+                thumbnail: e.node.previewThumbnailURL || '',
+                duration: Number(e.node.lengthSeconds) || 0,
+                views: e.node.viewCount ?? null,
+                date: e.node.createdAt || null
+            }));
+
+            return { videos, page: pageNum, hasMore: !!user.videos?.pageInfo?.hasNextPage };
         }
 
-        const payload = JSON.stringify({ query: queryBody });
-        const req = https.request('https://gql.twitch.tv/gql', {
-            method: 'POST',
-            headers: {
-                'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(payload),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            timeout: 10000
-        }, res => {
-            let body = '';
-            res.on('data', d => body += d);
-            res.on('end', () => {
-                if (res.statusCode !== 200) {
-                    return fallbackYtDlp();
-                }
-                try {
-                    const parsed = JSON.parse(body);
-                    const user = parsed?.data?.user;
-                    if (!user) {
-                        return reject(new Error(`Streamer "${username}" was not found on Twitch`));
-                    }
-
-                    if (type === 'clips') {
-                        const edges = user.clips?.edges || [];
-                        const videos = edges.map(e => ({
-                            id: e.node.slug || e.node.id,
-                            title: e.node.title || 'Untitled Clip',
-                            url: e.node.url || `https://clips.twitch.tv/${e.node.slug}`,
-                            thumbnail: e.node.thumbnailURL || '',
-                            duration: Number(e.node.durationSeconds) || 0,
-                            views: e.node.viewCount ?? null,
-                            date: e.node.createdAt || null
-                        }));
-                        return resolve({
-                            videos,
-                            page: pageNum,
-                            hasMore: !!user.clips?.pageInfo?.hasNextPage
-                        });
-                    } else {
-                        const edges = user.videos?.edges || [];
-                        const videos = edges.map(e => ({
-                            id: String(e.node.id),
-                            title: e.node.title || `VOD ${e.node.id}`,
-                            url: `https://www.twitch.tv/videos/${e.node.id}`,
-                            thumbnail: e.node.previewThumbnailURL || '',
-                            duration: Number(e.node.lengthSeconds) || 0,
-                            views: e.node.viewCount ?? null,
-                            date: e.node.createdAt || null
-                        }));
-                        return resolve({
-                            videos,
-                            page: pageNum,
-                            hasMore: !!user.videos?.pageInfo?.hasNextPage
-                        });
-                    }
-                } catch (e) {
-                    fallbackYtDlp();
-                }
-            });
-        });
-
-        req.on('error', () => fallbackYtDlp());
-        req.on('timeout', () => {
-            req.destroy();
+        executeGql().then(resolve).catch(err => {
+            console.log(`[Twitch GQL Warning]: ${err.message}. Falling back to yt-dlp for ${username}...`);
             fallbackYtDlp();
         });
-        req.write(payload);
-        req.end();
 
         function fallbackYtDlp() {
             let listUrl;
@@ -466,7 +526,9 @@ const server = http.createServer((req, res) => {
                 page: result.page || page,
                 nextCursor: result.nextCursor || null
             };
-            channelVideosCache.set(cacheKey, { expires: Date.now() + CHANNEL_CACHE_MS, data });
+            if (data.videos && data.videos.length > 0) {
+                channelVideosCache.set(cacheKey, { expires: Date.now() + CHANNEL_CACHE_MS, data });
+            }
             for (const [k, v] of channelVideosCache) if (v.expires < Date.now()) channelVideosCache.delete(k);
             sendJson(200, data);
         }).catch(err => {
