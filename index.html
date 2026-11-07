@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=2.6">
+    <link rel="stylesheet" href="style.css?v=2.7">
 </head>
 <body>
     <div class="app-container">
@@ -589,7 +589,7 @@
                         <div class="form-group">
                             <div class="label-with-val">
                                 <label for="thumb-timestamp"><i class="fa-regular fa-clock"></i> Frame Timestamp (Optional)</label>
-                                <span class="range-hint">e.g. 01:24:32 (leave blank for default cover)</span>
+                                <span class="range-hint">e.g. 01:24:32</span>
                             </div>
                             <div class="input-wrapper">
                                 <input type="text" id="thumb-timestamp" placeholder="00:00:00 (or leave blank for video cover)">
@@ -597,6 +597,7 @@
                                     <i class="fa-solid fa-camera"></i> From Player
                                 </button>
                             </div>
+                            <span class="field-hint margin-top-xs"><i class="fa-solid fa-circle-info"></i> Leave blank for video cover, or scrub player & click <strong>From Player</strong>.</span>
                         </div>
 
                         <div class="form-group">
@@ -952,6 +953,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=2.6"></script>
+    <script src="app.js?v=2.7"></script>
 </body>
 </html>
