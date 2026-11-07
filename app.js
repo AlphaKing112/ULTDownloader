@@ -1805,9 +1805,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const ytId = extractYtId(url);
                 if (ytId) {
                     const maxResUrl = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-                    thumbPreviewImg.src = maxResUrl;
-                    thumbDownloadLink.href = maxResUrl;
-                    thumbnailPreviewCard.classList.remove('hidden');
+                    if (thumbPreviewImg) {
+                        thumbPreviewImg.onerror = function() {
+                            this.onerror = null;
+                            this.src = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                        };
+                        thumbPreviewImg.src = maxResUrl;
+                    }
+                    if (thumbDownloadLink) thumbDownloadLink.href = maxResUrl;
+                    if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
                     logToConsole(`[Success] Fetched high-res thumbnail preview for video ID: ${ytId}`, 'success');
                 }
             }
