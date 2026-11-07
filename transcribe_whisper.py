@@ -46,6 +46,15 @@ def transcribe_audio(file_path):
         vad_parameters=dict(min_silence_duration_ms=500)
     )
     
+    total_sec = max(1.0, float(info.duration))
+    tot_m, tot_s = int(total_sec // 60), int(total_sec % 60)
+    tot_h = int(tot_m // 60)
+    tot_m = int(tot_m % 60)
+    tot_str = f"{tot_h:02d}:{tot_m:02d}:{tot_s:02d}" if tot_h > 0 else f"{tot_m:02d}:{tot_s:02d}"
+
+    sys.stderr.write(f"[WHISPER_PROGRESS: 20.0% | Transcribing dialogue: 00:00 / {tot_str}]\n")
+    sys.stderr.flush()
+
     lines = []
     for s in segments:
         m_s, s_s = int(s.start // 60), int(s.start % 60)
@@ -62,6 +71,13 @@ def transcribe_audio(file_path):
         text = s.text.strip()
         if text:
             lines.append(f"[{start_str} - {end_str}] {text}")
+            
+        current_sec = min(total_sec, float(s.end))
+        pct = min(98.5, 20.0 + (current_sec / total_sec) * 78.5)
+        curr_str = f"{h_e:02d}:{m_e:02d}:{s_e:02d}" if h_e > 0 else f"{m_e:02d}:{s_e:02d}"
+        
+        sys.stderr.write(f"[WHISPER_PROGRESS: {pct:.1f}% | Transcribing dialogue: {curr_str} / {tot_str}]\n")
+        sys.stderr.flush()
             
     return "\n".join(lines), info.language, None
 
@@ -117,11 +133,16 @@ def main():
             ytdlp_cmd.append(source)
             
             # Execute yt-dlp to extract lightweight audio
+            sys.stderr.write("[WHISPER_PROGRESS: 5.0% | Extracting lightweight audio stream...]\n")
+            sys.stderr.flush()
             proc = subprocess.run(ytdlp_cmd, capture_output=True, text=True, timeout=180)
             if proc.returncode != 0 and not os.path.exists(temp_audio):
                 err = proc.stderr.strip().split("\n")[-1] or "Audio download failed"
                 print(json.dumps({"success": False, "error": f"yt-dlp error: {err}"}))
                 sys.exit(0)
+
+            sys.stderr.write("[WHISPER_PROGRESS: 15.0% | Loading Whisper AI neural model...]\n")
+            sys.stderr.flush()
 
             target_file = temp_audio
         else:

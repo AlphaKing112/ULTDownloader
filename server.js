@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { exec, execFile } = require('child_process');
+const { exec, execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const urlModule = require('url');
 
@@ -1084,8 +1084,26 @@ const server = http.createServer((req, res) => {
 
                         if (cleanLines.length > 5) {
                             console.log(`[Server YouTube Auto-Sub Extracted]: ${cleanLines.length} subtitle lines`);
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            return res.end(JSON.stringify({ success: true, transcript: cleanLines.join('\n'), source: 'youtube-autosub' }));
+                            res.writeHead(200, {
+                                'Content-Type': 'application/x-ndjson; charset=utf-8',
+                                'Cache-Control': 'no-cache, no-transform',
+                                'Connection': 'keep-alive',
+                                'X-Accel-Buffering': 'no'
+                            });
+                            res.write(JSON.stringify({
+                                type: 'progress',
+                                percent: 100,
+                                status: 'Subtitles Extracted',
+                                speed: 'Instant',
+                                eta: '0s'
+                            }) + '\n');
+                            res.write(JSON.stringify({
+                                type: 'result',
+                                success: true,
+                                transcript: cleanLines.join('\n'),
+                                source: 'youtube-autosub'
+                            }) + '\n');
+                            return res.end();
                         }
 
                         // Fallback to local Whisper AI if YouTube had no subtitles
@@ -1103,31 +1121,86 @@ const server = http.createServer((req, res) => {
                     if (end) pyArgs.push('--end', end);
                     if (full) pyArgs.push('--full');
 
-                    execFile(PYTHON_BIN, pyArgs, { windowsHide: true, timeout: 240000, maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
-                        // Check if python process returned valid JSON on stdout
-                        if (stdout && stdout.trim()) {
+                    res.writeHead(200, {
+                        'Content-Type': 'application/x-ndjson; charset=utf-8',
+                        'Cache-Control': 'no-cache, no-transform',
+                        'Connection': 'keep-alive',
+                        'X-Accel-Buffering': 'no'
+                    });
+
+                    // Send initial progress tick immediately
+                    res.write(JSON.stringify({
+                        type: 'progress',
+                        percent: 5,
+                        status: 'Connecting to media stream...',
+                        speed: 'Connecting...',
+                        eta: '--'
+                    }) + '\n');
+
+                    const child = spawn(PYTHON_BIN, pyArgs, { windowsHide: true });
+                    let stdoutData = '';
+                    let stderrData = '';
+
+                    child.stderr.on('data', data => {
+                        const text = data.toString();
+                        stderrData += text;
+                        const lines = text.split(/[\r\n]+/);
+                        for (const line of lines) {
+                            const trimmed = line.trim();
+                            if (!trimmed) continue;
+                            const match = trimmed.match(/\[WHISPER_PROGRESS:\s*([0-9.]+)%\s*\|\s*(.*?)\]/);
+                            if (match) {
+                                const percent = parseFloat(match[1]);
+                                const status = match[2];
+                                res.write(JSON.stringify({
+                                    type: 'progress',
+                                    percent: percent,
+                                    status: status,
+                                    speed: 'Whisper AI',
+                                    eta: `${Math.max(1, Math.round(100 - percent))}% left`
+                                }) + '\n');
+                            }
+                        }
+                    });
+
+                    child.stdout.on('data', data => {
+                        stdoutData += data.toString();
+                    });
+
+                    child.on('close', code => {
+                        if (stdoutData.trim()) {
                             try {
-                                const result = JSON.parse(stdout.trim());
+                                const result = JSON.parse(stdoutData.trim());
                                 if (result.success) {
                                     console.log(`[Server Whisper Success]: Generated speech-to-text transcript (${result.language || 'en'})`);
-                                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                                    return res.end(JSON.stringify(result));
+                                    res.write(JSON.stringify({
+                                        type: 'result',
+                                        success: true,
+                                        transcript: result.transcript,
+                                        language: result.language,
+                                        notice: result.notice
+                                    }) + '\n');
+                                    return res.end();
                                 } else if (result.error) {
                                     console.error(`[Server Whisper Reported Error]: ${result.error}`);
-                                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                                    return res.end(JSON.stringify({ success: false, error: result.error }));
+                                    res.write(JSON.stringify({ type: 'result', success: false, error: result.error }) + '\n');
+                                    return res.end();
                                 }
-                            } catch (parseErr) {
+                            } catch (e) {
                                 // Fall through to standard error handler
                             }
                         }
 
-                        if (err || !stdout || !stdout.trim()) {
-                            const errMsg = (stderr || err?.message || 'Whisper transcription failed').trim();
-                            console.error(`[Server Whisper Error]: ${errMsg}`);
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            return res.end(JSON.stringify({ success: false, error: errMsg }));
-                        }
+                        const errMsg = (stderrData || 'Whisper transcription failed').trim();
+                        console.error(`[Server Whisper Error]: ${errMsg}`);
+                        res.write(JSON.stringify({ type: 'result', success: false, error: errMsg }) + '\n');
+                        res.end();
+                    });
+
+                    child.on('error', err => {
+                        console.error(`[Server Whisper Spawn Error]: ${err.message}`);
+                        res.write(JSON.stringify({ type: 'result', success: false, error: err.message }) + '\n');
+                        res.end();
                     });
                 }
             } catch (err) {

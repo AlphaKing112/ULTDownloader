@@ -2129,29 +2129,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     logToConsole(`[AI Transcript] Generating speech-to-text transcript${rangeMsg}...`, 'system');
                     showProgressBar('Connecting & preparing audio stream...');
-                    updateProgressBar(8, 'Connecting...', 'Starting');
-
-                    // Active live progress ticker so the progress bar smoothly animates across stages
-                    let progressTicker = null;
-                    let currentProgress = 8;
-                    progressTicker = setInterval(() => {
-                        if (currentProgress < 30) {
-                            currentProgress += 6;
-                            if (progressStatusTitle) progressStatusTitle.textContent = 'Extracting lightweight audio from video...';
-                            updateProgressBar(currentProgress, 'Downloading audio...', 'Processing');
-                        } else if (currentProgress < 75) {
-                            currentProgress += 4;
-                            if (progressStatusTitle) progressStatusTitle.textContent = 'Running Whisper AI speech recognition...';
-                            updateProgressBar(currentProgress, 'Whisper neural decoding...', 'Analyzing');
-                        } else if (currentProgress < 94) {
-                            currentProgress += 1;
-                            if (progressStatusTitle) progressStatusTitle.textContent = 'Compiling dialogue timestamps...';
-                            updateProgressBar(currentProgress, 'Formatting timestamps...', 'Finishing');
-                        }
-                    }, 400);
+                    updateProgressBar(5, 'Connecting...', 'Starting');
 
                     try {
-                        const res = await fetch('/api/fetch-transcript', {
+                        const response = await fetch('/api/fetch-transcript', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2161,47 +2142,75 @@ document.addEventListener('DOMContentLoaded', () => {
                                 full: isFull
                             })
                         });
-                        const data = await res.json();
-                        clearInterval(progressTicker);
 
-                        if (data.success && data.transcript) {
-                            updateProgressBar(100, 'Complete', '0s');
-                            if (progressStatusTitle) progressStatusTitle.textContent = 'Transcription Complete!';
-                            setTimeout(() => {
-                                hideProgressBar();
-                            }, 800);
+                        if (response.ok && response.body) {
+                            const reader = response.body.getReader();
+                            const decoder = new TextDecoder();
+                            let buffer = '';
 
-                            const videoBlock = document.getElementById('results-video-tags-block');
-                            const channelBlock = document.getElementById('results-channel-tags-block');
-                            const bodyHeaderTitle = document.getElementById('results-body-header-title');
-                            const noticeBanner = document.getElementById('results-notice-banner');
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
 
-                            if (videoBlock) videoBlock.style.display = 'none';
-                            if (channelBlock) channelBlock.style.display = 'none';
-                            if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-brain"></i> AI Subtitles & Full Transcript';
+                                buffer += decoder.decode(value, { stream: true });
+                                const lines = buffer.split('\n');
+                                buffer = lines.pop();
 
-                            if (resultsTitle) resultsTitle.textContent = 'AI Speech-to-Text Transcript (Local Whisper)';
-                            if (resultsIcon) resultsIcon.className = 'fa-solid fa-brain results-icon';
+                                for (const line of lines) {
+                                    if (!line.trim()) continue;
+                                    try {
+                                        const data = JSON.parse(line.trim());
+                                        if (data.type === 'progress') {
+                                            updateProgressBar(data.percent, data.speed || 'Whisper AI', data.eta || 'Compiling');
+                                            if (progressStatusTitle) progressStatusTitle.textContent = data.status || 'Compiling dialogue timestamps...';
+                                        } else if (data.type === 'result') {
+                                            if (data.success && data.transcript) {
+                                                updateProgressBar(100, 'Complete', '0s');
+                                                if (progressStatusTitle) progressStatusTitle.textContent = 'Transcription Complete!';
+                                                setTimeout(() => {
+                                                    hideProgressBar();
+                                                }, 800);
 
-                            if (noticeBanner) {
-                                if (data.notice) {
-                                    noticeBanner.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>${escapeHtml(data.notice)}</span>`;
-                                    noticeBanner.classList.remove('hidden');
-                                } else {
-                                    noticeBanner.classList.add('hidden');
+                                                const videoBlock = document.getElementById('results-video-tags-block');
+                                                const channelBlock = document.getElementById('results-channel-tags-block');
+                                                const bodyHeaderTitle = document.getElementById('results-body-header-title');
+                                                const noticeBanner = document.getElementById('results-notice-banner');
+
+                                                if (videoBlock) videoBlock.style.display = 'none';
+                                                if (channelBlock) channelBlock.style.display = 'none';
+                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-brain"></i> AI Subtitles & Full Transcript';
+
+                                                if (resultsTitle) resultsTitle.textContent = 'AI Speech-to-Text Transcript (Local Whisper)';
+                                                if (resultsIcon) resultsIcon.className = 'fa-solid fa-brain results-icon';
+
+                                                if (noticeBanner) {
+                                                    if (data.notice) {
+                                                        noticeBanner.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>${escapeHtml(data.notice)}</span>`;
+                                                        noticeBanner.classList.remove('hidden');
+                                                    } else {
+                                                        noticeBanner.classList.add('hidden');
+                                                    }
+                                                }
+
+                                                if (textBox) textBox.textContent = data.transcript;
+                                                if (resultsCard) resultsCard.classList.remove('hidden');
+
+                                                logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
+                                            } else {
+                                                hideProgressBar();
+                                                logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
+                                            }
+                                        }
+                                    } catch (parseErr) {
+                                        // Ignore partial JSON parse errors
+                                    }
                                 }
                             }
-
-                            if (textBox) textBox.textContent = data.transcript;
-                            if (resultsCard) resultsCard.classList.remove('hidden');
-
-                            logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
                         } else {
                             hideProgressBar();
-                            logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
+                            logToConsole('[Error] Failed to connect to transcript service.', 'error');
                         }
                     } catch (e) {
-                        clearInterval(progressTicker);
                         hideProgressBar();
                         logToConsole('[Error] Failed to connect to transcript service.', 'error');
                     }
