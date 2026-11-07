@@ -1710,6 +1710,91 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // --- Jump Player to Timestamp (Interactive Transcript Click) ---
+    window.jumpToPlayerTimestamp = async function(seconds, timeLabel, rowElem) {
+        if (typeof seconds !== 'number' || isNaN(seconds)) return;
+
+        // If player is hidden or not embedded yet, embed it using the active URL
+        if (activePlayerType === 'none' || !mediaPlayerCard || mediaPlayerCard.classList.contains('hidden')) {
+            const urlInputIds = ['tags-url', 'section-url', 'quick-url'];
+            let activeUrl = lastActiveUrl;
+            for (const id of urlInputIds) {
+                const val = document.getElementById(id)?.value.trim();
+                if (val) {
+                    activeUrl = val;
+                    break;
+                }
+            }
+            if (activeUrl) {
+                await embedVideoPlayer(activeUrl, 'auto');
+                await new Promise(r => setTimeout(r, 600));
+            }
+        }
+
+        // Expand player container if collapsed
+        const container = document.getElementById('player-iframe-container');
+        if (container && container.style.display === 'none') {
+            togglePlayerExpand();
+        }
+
+        let jumped = false;
+
+        // Twitch Player seek & play
+        if (activePlayerType === 'twitch' && twitchPlayerInstance) {
+            try {
+                if (typeof twitchPlayerInstance.seek === 'function') {
+                    twitchPlayerInstance.seek(seconds);
+                    if (typeof twitchPlayerInstance.play === 'function') {
+                        twitchPlayerInstance.play();
+                    }
+                    jumped = true;
+                }
+            } catch (err) {
+                console.warn('[Twitch Seek Error]', err);
+            }
+        }
+
+        // YouTube Player seek & play
+        if (activePlayerType === 'youtube' && ytPlayerInstance) {
+            try {
+                if (typeof ytPlayerInstance.seekTo === 'function') {
+                    ytPlayerInstance.seekTo(seconds, true);
+                    if (typeof ytPlayerInstance.playVideo === 'function') {
+                        ytPlayerInstance.playVideo();
+                    }
+                    jumped = true;
+                }
+            } catch (err) {
+                console.warn('[YouTube Seek Error]', err);
+            }
+        }
+
+        // HTML5 Video Player (if embedded)
+        const html5Video = document.querySelector('#player-iframe-container video');
+        if (html5Video) {
+            html5Video.currentTime = seconds;
+            html5Video.play().catch(() => {});
+            jumped = true;
+        }
+
+        // Scroll smoothly to player
+        if (mediaPlayerCard && !mediaPlayerCard.classList.contains('hidden')) {
+            mediaPlayerCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // Highlight clicked row
+        document.querySelectorAll('.transcript-interactive-row').forEach(r => r.classList.remove('active'));
+        if (rowElem) {
+            rowElem.classList.add('active');
+        }
+
+        if (jumped) {
+            logToConsole(`[Player] Jumped player to timestamp: ${timeLabel || formatSecondsToHHMMSS(seconds)} (${Math.floor(seconds)}s)`, 'success');
+        } else {
+            logToConsole(`[Player] Selected timestamp ${timeLabel || formatSecondsToHHMMSS(seconds)}. Video ready in player.`, 'info');
+        }
+    };
+
     // --- Modal Inspector Controls ---
     copyCmdBtn.addEventListener('click', () => {
         cmdModalOverlay.classList.remove('hidden');
@@ -2109,7 +2194,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                 });
                             }
 
-                            if (textBox) textBox.textContent = `[Channel / Uploader]: ${channel || 'YouTube'}\n\n[DESCRIPTION]:\n${description}`;
+                            if (textBox) {
+                                textBox.classList.remove('transcript-interactive-container');
+                                textBox.textContent = `[Channel / Uploader]: ${channel || 'YouTube'}\n\n[DESCRIPTION]:\n${description}`;
+                            }
+                            rawTranscriptData = description || '';
                             if (resultsCard) resultsCard.classList.remove('hidden');
 
                             renderTagCloud(video_tags, description);
@@ -2192,7 +2281,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                                     }
                                                 }
 
-                                                if (textBox) textBox.textContent = data.transcript;
+                                                if (textBox) {
+                                                    renderInteractiveTranscript(data.transcript);
+                                                }
                                                 if (resultsCard) resultsCard.classList.remove('hidden');
 
                                                 logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
@@ -2371,11 +2462,73 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (descContainer && descText) {
+            descContainer.classList.remove('transcript-interactive-container');
             descContainer.textContent = descText;
         }
 
         if (metaCard) {
             metaCard.classList.remove('hidden');
+        }
+    }
+
+    let rawTranscriptData = '';
+
+    function renderInteractiveTranscript(rawText) {
+        const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
+        if (!textBox) return;
+
+        rawTranscriptData = rawText || '';
+        textBox.innerHTML = '';
+        textBox.classList.add('transcript-interactive-container');
+
+        const lines = (rawText || '').split(/[\r\n]+/);
+        let hasTimestamps = false;
+        const fragment = document.createDocumentFragment();
+
+        lines.forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+
+            // Match [HH:MM:SS - HH:MM:SS] or [MM:SS - MM:SS] dialogue
+            const match = trimmed.match(/^\[([0-9:]+)(?:\s*-\s*([0-9:]+))?\]\s*(.*)$/);
+
+            if (match) {
+                hasTimestamps = true;
+                const startStr = match[1];
+                const endStr = match[2] || '';
+                const text = match[3];
+                const startSec = parseTimestampToSeconds(startStr);
+
+                const row = document.createElement('div');
+                row.className = 'transcript-interactive-row';
+
+                const timeBtn = document.createElement('button');
+                timeBtn.type = 'button';
+                timeBtn.className = 'transcript-time-chip';
+                timeBtn.title = `Jump player to ${startStr}`;
+                timeBtn.innerHTML = `<i class="fa-solid fa-play"></i> <span>${escapeHtml(startStr)}${endStr ? ' - ' + escapeHtml(endStr) : ''}</span>`;
+                timeBtn.onclick = () => jumpToPlayerTimestamp(startSec, startStr, row);
+
+                const textSpan = document.createElement('span');
+                textSpan.className = 'transcript-text-content';
+                textSpan.textContent = text;
+
+                row.appendChild(timeBtn);
+                row.appendChild(textSpan);
+                fragment.appendChild(row);
+            } else {
+                const plainRow = document.createElement('div');
+                plainRow.className = 'transcript-plain-line';
+                plainRow.textContent = trimmed;
+                fragment.appendChild(plainRow);
+            }
+        });
+
+        if (hasTimestamps) {
+            textBox.appendChild(fragment);
+        } else {
+            textBox.classList.remove('transcript-interactive-container');
+            textBox.textContent = rawText;
         }
     }
 
@@ -2393,12 +2546,12 @@ document.addEventListener('DOMContentLoaded', () => {
             textToCopy = Array.from(document.querySelectorAll('#results-channel-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
             logToConsole('[Clipboard] Copied Channel Tags to clipboard!', 'success');
         } else if (category === 'description') {
-            textToCopy = document.getElementById('results-text-box')?.textContent || '';
+            textToCopy = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
             logToConsole('[Clipboard] Copied Description / Transcript to clipboard!', 'success');
         } else if (category === 'all') {
             const vTags = Array.from(document.querySelectorAll('#results-video-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
             const cTags = Array.from(document.querySelectorAll('#results-channel-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
-            const desc = document.getElementById('results-text-box')?.textContent || '';
+            const desc = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
             textToCopy = `VIDEO TAGS:\n${vTags}\n\nCHANNEL TAGS:\n${cTags}\n\nDESCRIPTION / TRANSCRIPT:\n${desc}`;
             logToConsole('[Clipboard] Copied All Metadata to clipboard!', 'success');
         }
