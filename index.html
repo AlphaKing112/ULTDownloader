@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=2.7">
+    <link rel="stylesheet" href="style.css?v=2.8">
 </head>
 <body>
     <div class="app-container">
@@ -622,9 +622,6 @@
                                 <button type="button" class="btn btn-primary btn-sm" id="thumb-download-btn" onclick="downloadThumbnailImage()">
                                     <i class="fa-solid fa-download"></i> Download JPG
                                 </button>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="sendThumbToClipper()">
-                                    <i class="fa-solid fa-scissors"></i> Send to Clipper
-                                </button>
                             </div>
                         </div>
                     </div>
@@ -719,12 +716,6 @@
                                 <i class="fa-solid fa-camera"></i>
                                 <span>Save Thumbnail at Timestamp</span>
                             </button>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="markCurrentTimestamp('start')" title="Set as Start Time in Section Clipper">
-                                <i class="fa-solid fa-play" style="color: #22c55e;"></i> <span>Start</span>
-                            </button>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="markCurrentTimestamp('end')" title="Set as End Time in Section Clipper">
-                                <i class="fa-solid fa-stop" style="color: #ef4444;"></i> <span>End</span>
-                            </button>
                         </div>
                     </div>
 
@@ -750,9 +741,6 @@
                                 </button>
                                 <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-captured-thumb" onclick="copyCapturedThumbToClipboard()">
                                     <i class="fa-regular fa-copy"></i> Copy Image
-                                </button>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="sendCapturedThumbToClipper()">
-                                    <i class="fa-solid fa-scissors"></i> Clip from Here
                                 </button>
                             </div>
                         </div>
@@ -953,6 +941,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=2.7"></script>
+    <script src="app.js?v=2.8"></script>
 </body>
 </html>
