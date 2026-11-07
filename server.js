@@ -1236,7 +1236,15 @@ const server = http.createServer((req, res) => {
                 res.end(`Server Error: ${err.code}`);
             }
         } else {
-            res.writeHead(200, { 'Content-Type': contentType });
+            // Prevent browser caching for application code so deployments on Render reflect immediately
+            const isCodeAsset = ext === '.js' || ext === '.css' || ext === '.html';
+            const headers = { 'Content-Type': contentType };
+            if (isCodeAsset) {
+                headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+                headers['Pragma'] = 'no-cache';
+                headers['Expires'] = '0';
+            }
+            res.writeHead(200, headers);
             res.end(content, 'utf-8');
         }
     });

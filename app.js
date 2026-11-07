@@ -2166,7 +2166,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         if (data.success && data.transcript) {
                             updateProgressBar(100, 'Complete', '0s');
-                            finishProgressBar(true);
+                            if (progressStatusTitle) progressStatusTitle.textContent = 'Transcription Complete!';
+                            setTimeout(() => {
+                                hideProgressBar();
+                            }, 800);
 
                             const videoBlock = document.getElementById('results-video-tags-block');
                             const channelBlock = document.getElementById('results-channel-tags-block');
@@ -2194,12 +2197,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                             logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
                         } else {
-                            finishProgressBar(false);
+                            hideProgressBar();
                             logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
                         }
                     } catch (e) {
                         clearInterval(progressTicker);
-                        finishProgressBar(false);
+                        hideProgressBar();
                         logToConsole('[Error] Failed to connect to transcript service.', 'error');
                     }
                 }
