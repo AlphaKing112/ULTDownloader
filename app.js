@@ -249,6 +249,89 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Live Transcript Range Duration & Presets ---
+    const transcriptStartInput = document.getElementById('transcript-start');
+    const transcriptEndInput = document.getElementById('transcript-end');
+    const transcriptDurationBadge = document.getElementById('transcript-duration-badge');
+
+    function updateTranscriptDurationDisplay() {
+        if (!transcriptStartInput || !transcriptEndInput || !transcriptDurationBadge) return;
+
+        const startVal = transcriptStartInput.value.trim();
+        const endVal = transcriptEndInput.value.trim();
+
+        if (endVal.toLowerCase() === 'full' || (!startVal && !endVal)) {
+            transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-infinity"></i> Full Video';
+            transcriptDurationBadge.className = 'badge-duration valid';
+            return;
+        }
+
+        const startSec = parseTimestampToSeconds(startVal || '00:00:00');
+        const endSec = parseTimestampToSeconds(endVal);
+
+        if (endSec > startSec) {
+            const durationSec = endSec - startSec;
+            const hhmmss = formatSecondsToHHMMSS(durationSec);
+            const human = formatDurationHuman(durationSec);
+            transcriptDurationBadge.innerHTML = `<i class="fa-solid fa-stopwatch"></i> Total: ${hhmmss} (${human})`;
+            transcriptDurationBadge.className = 'badge-duration valid';
+        } else {
+            transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> End must be > Start';
+            transcriptDurationBadge.className = 'badge-duration invalid';
+        }
+    }
+
+    window.setTranscriptPreset = function(preset) {
+        if (!transcriptStartInput || !transcriptEndInput) return;
+        document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
+
+        if (preset === '5m') {
+            transcriptStartInput.value = '00:00:00';
+            transcriptEndInput.value = '00:05:00';
+        } else if (preset === '15m') {
+            transcriptStartInput.value = '00:00:00';
+            transcriptEndInput.value = '00:15:00';
+        } else if (preset === '30m') {
+            transcriptStartInput.value = '00:00:00';
+            transcriptEndInput.value = '00:30:00';
+        } else if (preset === 'full') {
+            transcriptStartInput.value = '';
+            transcriptEndInput.value = 'Full';
+        }
+
+        // Mark active pill
+        const activeBtn = Array.from(document.querySelectorAll('.transcript-preset-pill')).find(b => b.getAttribute('onclick')?.includes(`'${preset}'`));
+        if (activeBtn) activeBtn.classList.add('active');
+
+        updateTranscriptDurationDisplay();
+        updateGeneratedCommand();
+    };
+
+    window.syncTranscriptRangeFromClipper = function() {
+        if (!sectionStartInput || !sectionEndInput || !transcriptStartInput || !transcriptEndInput) return;
+        transcriptStartInput.value = sectionStartInput.value.trim() || '00:00:00';
+        transcriptEndInput.value = sectionEndInput.value.trim() || '00:01:00';
+        document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
+        updateTranscriptDurationDisplay();
+        updateGeneratedCommand();
+        logToConsole(`[Sync] Imported section range: ${transcriptStartInput.value} → ${transcriptEndInput.value} to Transcript Analyzer`, 'info');
+    };
+
+    if (transcriptStartInput) {
+        transcriptStartInput.addEventListener('input', () => {
+            document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
+            updateTranscriptDurationDisplay();
+            updateGeneratedCommand();
+        });
+    }
+    if (transcriptEndInput) {
+        transcriptEndInput.addEventListener('input', () => {
+            document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
+            updateTranscriptDurationDisplay();
+            updateGeneratedCommand();
+        });
+    }
+
     // --- Range Builder for Multi-Section ---
     const newRangeInput = document.getElementById('new-range-input');
     const btnAddRange = document.getElementById('btn-add-range');
@@ -1186,6 +1269,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (rangeRow) {
             rangeRow.style.display = mode === 'transcript' ? 'flex' : 'none';
         }
+        if (mode === 'transcript') {
+            updateTranscriptDurationDisplay();
+        }
     };
 
     // --- CLI Command Generator ---
@@ -1296,7 +1382,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (mode === 'tags') {
                     cmd = `yt-dlp -j "${url}" | jq -r ".tags // [\\"No tags\\"] | join(\\", \\")"`;
                 } else {
-                    cmd = `yt-dlp --write-sub --write-auto-sub --skip-download --sub-lang "en.*,en" "${url}" && powershell -Command "Get-Content '*.vtt' | Select-String '^[^0-9]' | Out-File transcript.txt" && python analyze_transcript.py`;
+                    const start = (document.getElementById('transcript-start')?.value || '').trim();
+                    const end = (document.getElementById('transcript-end')?.value || '').trim();
+                    let rangeArgs = '';
+                    if (end.toLowerCase() === 'full') {
+                        rangeArgs = ' --full';
+                    } else {
+                        if (start) rangeArgs += ` --start ${start}`;
+                        if (end) rangeArgs += ` --end ${end}`;
+                    }
+                    cmd = `python transcribe_whisper.py "${url}"${rangeArgs}`;
                 }
                 break;
             }
@@ -2024,22 +2119,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (mode === 'transcript') {
                     const startVal = (document.getElementById('transcript-start')?.value || '').trim();
                     const endVal = (document.getElementById('transcript-end')?.value || '').trim();
-                    const hasRange = Boolean(startVal || endVal);
-                    const rangeMsg = hasRange ? ` (${startVal || '00:00:00'} - ${endVal || 'End'})` : '';
+                    const isFull = endVal.toLowerCase() === 'full';
+                    const hasRange = Boolean(startVal || (endVal && !isFull));
+                    const rangeMsg = isFull ? ' (Full Stream)' : (hasRange ? ` (${startVal || '00:00:00'} - ${endVal})` : ' (First 5m Fast Preview)');
 
-                    logToConsole(`[AI Transcript] Generating full speech-to-text transcript${rangeMsg}...`, 'system');
+                    logToConsole(`[AI Transcript] Generating speech-to-text transcript${rangeMsg}...`, 'system');
                     showProgressBar('Transcribing speech with local Whisper AI...');
                     try {
                         const res = await fetch('/api/fetch-transcript', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url: tagsUrl, start: startVal, end: endVal })
+                            body: JSON.stringify({
+                                url: tagsUrl,
+                                start: isFull ? '' : startVal,
+                                end: isFull ? '' : endVal,
+                                full: isFull
+                            })
                         });
                         const data = await res.json();
                         if (data.success && data.transcript) {
                             const videoBlock = document.getElementById('results-video-tags-block');
                             const channelBlock = document.getElementById('results-channel-tags-block');
                             const bodyHeaderTitle = document.getElementById('results-body-header-title');
+                            const noticeBanner = document.getElementById('results-notice-banner');
 
                             if (videoBlock) videoBlock.style.display = 'none';
                             if (channelBlock) channelBlock.style.display = 'none';
@@ -2047,10 +2149,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
                             if (resultsTitle) resultsTitle.textContent = 'AI Speech-to-Text Transcript (Local Whisper)';
                             if (resultsIcon) resultsIcon.className = 'fa-solid fa-brain results-icon';
+
+                            if (noticeBanner) {
+                                if (data.notice) {
+                                    noticeBanner.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>${escapeHtml(data.notice)}</span>`;
+                                    noticeBanner.classList.remove('hidden');
+                                } else {
+                                    noticeBanner.classList.add('hidden');
+                                }
+                            }
+
                             if (textBox) textBox.textContent = data.transcript;
                             if (resultsCard) resultsCard.classList.remove('hidden');
 
-                            logToConsole('[Success] Full speech-to-text transcript generated directly on-screen!', 'success');
+                            logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
                         } else {
                             logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
                         }

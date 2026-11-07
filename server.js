@@ -1049,13 +1049,13 @@ const server = http.createServer((req, res) => {
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', () => {
             try {
-                const { url, start, end } = JSON.parse(body);
+                const { url, start, end, full } = JSON.parse(body);
                 if (!url) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ error: 'URL required' }));
                 }
 
-                console.log(`[Server Transcript Request]: ${url} (Range: ${start || '00:00:00'} - ${end || 'Full'})`);
+                console.log(`[Server Transcript Request]: ${url} (Range: ${start || '00:00:00'} - ${end || (full ? 'Full' : 'Default')})`);
 
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
                 const hasRange = Boolean(start && end);
@@ -1101,6 +1101,7 @@ const server = http.createServer((req, res) => {
                     const pyArgs = [path.join(__dirname, 'transcribe_whisper.py'), url];
                     if (start) pyArgs.push('--start', start);
                     if (end) pyArgs.push('--end', end);
+                    if (full) pyArgs.push('--full');
 
                     execFile(PYTHON_BIN, pyArgs, { windowsHide: true, timeout: 240000, maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
                         if (err || !stdout || !stdout.trim()) {

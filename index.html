@@ -515,32 +515,64 @@
                                     <input type="radio" name="analysis-mode" value="tags" checked>
                                     <div class="radio-card-content">
                                         <i class="fa-solid fa-tags"></i>
-                                        <span>Extract Tags & Description</span>
+                                        <div class="radio-card-text">
+                                            <span class="radio-card-title">Tags & Description</span>
+                                            <span class="radio-card-sub">Extract video metadata</span>
+                                        </div>
                                     </div>
                                 </label>
                                 <label class="radio-card" onclick="selectAnalysisMode('transcript')">
                                     <input type="radio" name="analysis-mode" value="transcript">
                                     <div class="radio-card-content">
                                         <i class="fa-solid fa-brain"></i>
-                                        <span>AI Speech-to-Text Transcript (Whisper)</span>
+                                        <div class="radio-card-text">
+                                            <span class="radio-card-title">AI Speech Transcript</span>
+                                            <span class="radio-card-sub">Fast Whisper AI</span>
+                                        </div>
                                     </div>
                                 </label>
                             </div>
                         </div>
 
-                        <div class="form-row transcript-range-row" id="transcript-range-row" style="display: none;">
-                            <div class="form-group flex-1">
-                                <label for="transcript-start"><i class="fa-regular fa-clock"></i> Start Time (Optional)</label>
-                                <div class="input-wrapper">
-                                    <input type="text" id="transcript-start" placeholder="00:00:00 (or leave blank)">
+                        <div class="transcript-range-card" id="transcript-range-row" style="display: none;">
+                            <div class="transcript-range-header">
+                                <span class="transcript-range-title"><i class="fa-solid fa-sliders"></i> Transcript Audio Range</span>
+                                <div class="transcript-range-actions">
+                                    <button type="button" class="btn-sync-range" onclick="syncTranscriptRangeFromClipper()" title="Import Start and End times from Section Clipper">
+                                        <i class="fa-solid fa-arrows-rotate"></i> Sync from Clipper
+                                    </button>
                                 </div>
                             </div>
-                            <div class="form-group flex-1">
-                                <label for="transcript-end"><i class="fa-regular fa-clock"></i> End Time (Optional)</label>
-                                <div class="input-wrapper">
-                                    <input type="text" id="transcript-end" placeholder="00:05:00 (or leave blank for full)">
+
+                            <div class="form-row transcript-inputs-row">
+                                <div class="form-group flex-1">
+                                    <label for="transcript-start"><i class="fa-regular fa-clock"></i> Start Time</label>
+                                    <div class="input-wrapper">
+                                        <input type="text" id="transcript-start" placeholder="00:00:00" value="00:00:00">
+                                    </div>
+                                </div>
+                                <div class="form-group flex-1">
+                                    <div class="label-with-val">
+                                        <label for="transcript-end"><i class="fa-regular fa-clock"></i> End Time</label>
+                                        <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-stopwatch"></i> Total: 00:05:00 (5m 0s)</span>
+                                    </div>
+                                    <div class="input-wrapper">
+                                        <input type="text" id="transcript-end" placeholder="00:05:00" value="00:05:00">
+                                    </div>
                                 </div>
                             </div>
+
+                            <!-- 1-Click Quick Range Presets for VODs -->
+                            <div class="transcript-presets-wrapper">
+                                <span class="presets-label"><i class="fa-solid fa-bolt"></i> Quick Presets:</span>
+                                <div class="transcript-presets-row">
+                                    <button type="button" class="transcript-preset-pill active" onclick="setTranscriptPreset('5m')">⚡ First 5m (Fast)</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('15m')">⏱️ 15m</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('30m')">⏱️ 30m</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('full')">🌐 Full VOD</button>
+                                </div>
+                            </div>
+                            <span class="field-hint"><i class="fa-solid fa-circle-info"></i> For long 6-9hr VODs, transcribing 5-15 mins finishes in ~10s. Choose <strong>Full VOD</strong> only if you need the entire multi-hour stream.</span>
                         </div>
                     </div>
 
@@ -722,6 +754,7 @@
 
                         <!-- Description & Transcript Output Block -->
                         <div class="results-section-block">
+                            <div class="results-notice-banner hidden" id="results-notice-banner"></div>
                             <div class="section-sub-header">
                                 <span id="results-body-header-title"><i class="fa-solid fa-align-left"></i> Video Description</span>
                                 <button type="button" class="btn-icon" onclick="copyExtractedCategory('description')" title="Copy Description">

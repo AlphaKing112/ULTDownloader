@@ -4,14 +4,20 @@ import argparse
 import tempfile
 import json
 import subprocess
+import re
 
 def transcribe_audio(file_path):
     from faster_whisper import WhisperModel
-    # Load model with int8 quantization on CPU - fast and low memory
-    model = WhisperModel("base.en", device="cpu", compute_type="int8")
+    # Utilize available CPU threads for high performance (user has 24 threads)
+    cpu_threads = min(12, os.cpu_count() or 4)
+    model = WhisperModel("base.en", device="cpu", compute_type="int8", cpu_threads=cpu_threads)
+    
+    # beam_size=1 (greedy search) is 2.5x-3x faster than beam_size=5 with essentially identical accuracy for English
     segments, info = model.transcribe(
         file_path,
-        beam_size=5,
+        beam_size=1,
+        best_of=1,
+        temperature=0.0,
         vad_filter=True, # Voice activity detection filters out silence/hallucinations
         vad_parameters=dict(min_silence_duration_ms=500)
     )
@@ -40,6 +46,7 @@ def main():
     parser.add_argument("source", help="Media URL or local file path")
     parser.add_argument("--start", help="Start time (HH:MM:SS)", default="")
     parser.add_argument("--end", help="End time (HH:MM:SS)", default="")
+    parser.add_argument("--full", help="Force transcribe full video/VOD", action="store_true")
     args = parser.parse_args()
 
     source = args.source.strip()
@@ -48,26 +55,43 @@ def main():
 
     try:
         if is_url:
-            # Extract lightweight audio using yt-dlp
+            # Detect whether this is a long VOD (Twitch / Kick VOD)
+            is_vod = bool(re.search(r'twitch\.tv/videos/\d+|kick\.com/video/|kick\.com/[^/]+/videos/', source, re.I))
+            start_time = args.start.strip()
+            end_time = args.end.strip()
+            is_full = args.full or end_time.lower() in ("full", "all", "inf")
+            auto_capped = False
+
+            # If user submitted a long VOD without any range and didn't check "Full VOD":
+            # Default to first 5 minutes to prevent 45+ minute CPU freeze on a 6-9 hour VOD!
+            if is_vod and not start_time and (not end_time or not is_full):
+                start_time = "00:00:00"
+                end_time = "00:05:00"
+                auto_capped = True
+
             temp_dir = tempfile.gettempdir()
             temp_base = os.path.join(temp_dir, f"ult_whisper_{os.getpid()}")
             temp_audio = f"{temp_base}.mp3"
 
-            ytdlp_cmd = ["yt-dlp", "--no-warnings", "-x", "--audio-format", "mp3", "-o", f"{temp_base}.%(ext)s"]
+            ytdlp_cmd = [
+                "yt-dlp", "--no-warnings", "-x", "--audio-format", "mp3",
+                "--concurrent-fragments", "5",
+                "-o", f"{temp_base}.%(ext)s"
+            ]
             
-            # If user specified a section for long VODs
-            if args.start and args.end:
-                ytdlp_cmd.extend(["--download-sections", f"*{args.start}-{args.end}"])
-            elif args.start:
-                ytdlp_cmd.extend(["--download-sections", f"*{args.start}-inf"])
+            # Apply section targeting if range is specified and not full VOD
+            if start_time and end_time and not is_full:
+                ytdlp_cmd.extend(["--download-sections", f"*{start_time}-{end_time}"])
+            elif start_time and not is_full:
+                ytdlp_cmd.extend(["--download-sections", f"*{start_time}-inf"])
                 
             if "kick.com" in source.lower():
                 ytdlp_cmd.extend(["--impersonate", "Chrome"])
 
             ytdlp_cmd.append(source)
             
-            # Execute yt-dlp to extract audio
-            proc = subprocess.run(ytdlp_cmd, capture_output=True, text=True, timeout=120)
+            # Execute yt-dlp to extract lightweight audio
+            proc = subprocess.run(ytdlp_cmd, capture_output=True, text=True, timeout=180)
             if proc.returncode != 0 and not os.path.exists(temp_audio):
                 err = proc.stderr.strip().split("\n")[-1] or "Audio download failed"
                 print(json.dumps({"success": False, "error": f"yt-dlp error: {err}"}))
@@ -76,6 +100,7 @@ def main():
             target_file = temp_audio
         else:
             target_file = source
+            auto_capped = False
 
         if not os.path.exists(target_file):
             print(json.dumps({"success": False, "error": "Extracted audio file not found"}))
@@ -85,7 +110,16 @@ def main():
         if not transcript.strip():
             transcript = "No spoken words or dialogue detected in this video section."
 
-        print(json.dumps({"success": True, "transcript": transcript, "language": language}))
+        notice = None
+        if auto_capped:
+            notice = "Transcribed the first 5 minutes of VOD for fast response. Use the range presets (15m, 30m, or Full) for longer sections."
+
+        print(json.dumps({
+            "success": True,
+            "transcript": transcript,
+            "language": language,
+            "notice": notice
+        }))
 
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
@@ -100,4 +134,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
