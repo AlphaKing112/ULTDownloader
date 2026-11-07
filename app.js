@@ -1859,6 +1859,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
+                showProgressBar('Connecting & Downloading Media...');
                 const response = await fetch('/api/execute', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1866,7 +1867,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 if (response.ok && response.body) {
-                    showProgressBar('Downloading & Merging Media...');
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
                     let buffer = '';

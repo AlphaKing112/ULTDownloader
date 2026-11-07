@@ -570,9 +570,6 @@ const server = http.createServer((req, res) => {
                     if (!finalCommand.includes('--impersonate') && finalCommand.toLowerCase().includes('kick.com')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --impersonate Chrome');
                     }
-                    if (!finalCommand.includes('--sleep-requests') && !isYT) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --sleep-requests 1.5');
-                    }
                     if (!finalCommand.includes('--js-runtimes')) {
                         finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --js-runtimes node');
                     }
@@ -596,6 +593,24 @@ const server = http.createServer((req, res) => {
                     }
                 }
 
+                // Parse target section duration for accurate live percentage calculation on long clips
+                let sectionDurationSec = 0;
+                const sectionMatch = finalCommand.match(/--download-sections\s+["']?\*?([0-9:]+(?:\.[0-9]+)?)-([0-9:]+(?:\.[0-9]+)?)/i);
+                if (sectionMatch) {
+                    const parseTimeToSec = (tStr) => {
+                        const parts = (tStr || '').trim().split(':').map(Number);
+                        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+                        if (parts.length === 2) return parts[0] * 60 + parts[1];
+                        return parseFloat(tStr) || 0;
+                    };
+                    const sStart = parseTimeToSec(sectionMatch[1]);
+                    const sEnd = parseTimeToSec(sectionMatch[2]);
+                    if (sEnd > sStart) {
+                        sectionDurationSec = sEnd - sStart;
+                        console.log(`[Server] Detected clip target duration: ${sectionDurationSec}s (${sectionMatch[1]} to ${sectionMatch[2]})`);
+                    }
+                }
+
                 console.log(`[Server Executing Command Stream]: ${finalCommand}`);
 
                 res.writeHead(200, {
@@ -604,6 +619,15 @@ const server = http.createServer((req, res) => {
                     'Connection': 'keep-alive',
                     'X-Accel-Buffering': 'no'
                 });
+
+                // Send immediate feedback so user sees activity instantly
+                res.write(JSON.stringify({
+                    text: '[Download Initiated] Connecting to stream & buffering media segments...',
+                    type: 'system',
+                    percent: 0.1,
+                    speed: '--',
+                    eta: '--'
+                }) + '\n');
 
                 const child = exec(finalCommand, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
 
@@ -619,17 +643,48 @@ const server = http.createServer((req, res) => {
                     lines.forEach(line => {
                         const trimmed = line.trim();
                         if (!trimmed) return;
-                        
+
+                        // Filter out repetitive HLS manifest skip spam (can be 2,000+ lines on long VODs)
+                        if (trimmed.startsWith('[hls @') && (trimmed.includes('Skip') || trimmed.includes('#EXT-X-'))) {
+                            return;
+                        }
+
                         let percentMatch = trimmed.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
                         let speedMatch = trimmed.match(/at\s+([0-9\.]+\s*[KMGk]?i?B\/s)/i) || trimmed.match(/speed=\s*([0-9\.]+\s*x)/i);
                         let etaMatch = trimmed.match(/ETA\s+([0-9:]+)/i);
 
-                        if (!percentMatch && trimmed.includes('frame=')) {
-                            let frameMatch = trimmed.match(/frame=\s*(\d+)/i);
-                            if (frameMatch) {
-                                let frameNum = parseInt(frameMatch[1], 10);
-                                let simPercent = Math.min(99, Math.floor((frameNum / 250) * 100));
-                                percentMatch = [null, simPercent.toString()];
+                        // If downloading section via ffmpeg (Twitch/Kick HLS chunk downloader)
+                        // ffmpeg outputs: frame=  525 fps=340 q=-1.0 size= 6656KiB time=00:00:02.49 bitrate=... speed=1.62x
+                        if (trimmed.includes('time=') && (trimmed.includes('frame=') || trimmed.includes('size='))) {
+                            const timeMatch = trimmed.match(/time=\s*([0-9:]+(?:\.[0-9]+)?)/i);
+                            const ffmpegSpeedMatch = trimmed.match(/speed=\s*([0-9\.]+)x/i);
+
+                            if (timeMatch) {
+                                const parseTimeToSec = (tStr) => {
+                                    const parts = (tStr || '').trim().split(':').map(Number);
+                                    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+                                    if (parts.length === 2) return parts[0] * 60 + parts[1];
+                                    return parseFloat(tStr) || 0;
+                                };
+                                const curSec = parseTimeToSec(timeMatch[1]);
+                                if (sectionDurationSec > 0) {
+                                    const calcPercent = Math.min(99.9, Math.max(0.1, (curSec / sectionDurationSec) * 100));
+                                    percentMatch = [null, calcPercent.toFixed(1)];
+
+                                    if (ffmpegSpeedMatch) {
+                                        const speedMultiplier = parseFloat(ffmpegSpeedMatch[1]) || 1;
+                                        speedMatch = [null, `${ffmpegSpeedMatch[1]}x`];
+                                        if (speedMultiplier > 0) {
+                                            const remainingSec = Math.max(0, sectionDurationSec - curSec);
+                                            const etaSeconds = Math.round(remainingSec / speedMultiplier);
+                                            const m = Math.floor(etaSeconds / 60).toString().padStart(2, '0');
+                                            const s = (etaSeconds % 60).toString().padStart(2, '0');
+                                            etaMatch = [null, `${m}:${s}`];
+                                        }
+                                    }
+                                } else {
+                                    percentMatch = [null, Math.min(99, Math.floor(curSec)).toString()];
+                                }
                             }
                         }
 
