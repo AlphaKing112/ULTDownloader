@@ -1567,9 +1567,16 @@ input[type="number"] {
     height: 100%;
     width: 0%;
     background: linear-gradient(90deg, #7c3aed 0%, #a78bfa 50%, #10b981 100%);
+    background-size: 200% 100%;
     border-radius: 6px;
-    transition: width 0.25s ease-out;
+    transition: width 0.3s ease-out;
     box-shadow: 0 0 12px rgba(167, 139, 250, 0.6);
+    animation: progressShimmer 2s linear infinite;
+}
+
+@keyframes progressShimmer {
+    0% { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
 }
 
 .progress-footer {

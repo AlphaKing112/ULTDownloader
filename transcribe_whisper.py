@@ -132,16 +132,37 @@ def main():
 
             ytdlp_cmd.append(source)
             
-            # Execute yt-dlp to extract lightweight audio
-            sys.stderr.write("[WHISPER_PROGRESS: 5.0% | Extracting lightweight audio stream...]\n")
+            # Execute yt-dlp to extract lightweight audio with active stage emission
+            sys.stderr.write("[WHISPER_PROGRESS: 5.0% | Connecting to stream & downloading audio...]\n")
             sys.stderr.flush()
-            proc = subprocess.run(ytdlp_cmd, capture_output=True, text=True, timeout=180)
+
+            proc = subprocess.Popen(ytdlp_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            last_stage = 5.0
+
+            for line in proc.stdout:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                if any(k in line_str for k in ("Downloading stream metadata", "Downloading video access token", "Downloading m3u8", "Extracting URL")) and last_stage < 8.0:
+                    last_stage = 8.0
+                    sys.stderr.write("[WHISPER_PROGRESS: 8.0% | Fetching stream manifest...]\n")
+                    sys.stderr.flush()
+                elif any(k in line_str for k in ("Downloading 1 format", "Opening", "download", "Destination")) and last_stage < 11.0:
+                    last_stage = 11.0
+                    sys.stderr.write("[WHISPER_PROGRESS: 11.0% | Buffering audio fragments...]\n")
+                    sys.stderr.flush()
+                elif any(k in line_str for k in ("ExtractAudio", "Deleting original")) and last_stage < 14.0:
+                    last_stage = 14.0
+                    sys.stderr.write("[WHISPER_PROGRESS: 14.0% | Slicing audio stream...]\n")
+                    sys.stderr.flush()
+
+            proc.wait(timeout=180)
+
             if proc.returncode != 0 and not os.path.exists(temp_audio):
-                err = proc.stderr.strip().split("\n")[-1] or "Audio download failed"
-                print(json.dumps({"success": False, "error": f"yt-dlp error: {err}"}))
+                print(json.dumps({"success": False, "error": "Audio stream download failed"}))
                 sys.exit(0)
 
-            sys.stderr.write("[WHISPER_PROGRESS: 15.0% | Loading Whisper AI neural model...]\n")
+            sys.stderr.write("[WHISPER_PROGRESS: 18.0% | Loading Whisper AI neural model...]\n")
             sys.stderr.flush()
 
             target_file = temp_audio
