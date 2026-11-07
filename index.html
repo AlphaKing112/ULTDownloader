@@ -289,10 +289,10 @@
 
                     <!-- TAB 3: Multi-Section Clipper (Option 8) -->
                     <div class="tool-view" id="tab-multi-section">
-                        <p class="tool-description">Batch download multiple timestamp sections from a single YouTube video in one go.</p>
+                        <p class="tool-description">Batch download multiple timestamp sections from a single YouTube video or stream in one go.</p>
 
                         <div class="form-group">
-                            <label for="multi-url"><i class="fa-solid fa-link"></i> YouTube Video Link</label>
+                            <label for="multi-url"><i class="fa-solid fa-link"></i> Video Link URL (YouTube, Twitch, Kick)</label>
                             <div class="input-wrapper">
                                 <input type="url" id="multi-url" placeholder="https://www.youtube.com/watch?v=..." required>
                                 <button type="button" class="btn-paste" onclick="pasteClipboard('multi-url')"><i class="fa-regular fa-clipboard"></i></button>
@@ -300,13 +300,16 @@
                         </div>
 
                         <div class="form-group">
-                            <label><i class="fa-solid fa-plus-minus"></i> Add Time Range Range (HH:MM:SS-HH:MM:SS)</label>
+                            <label><i class="fa-solid fa-plus-minus"></i> Add Time Range (HH:MM:SS-HH:MM:SS)</label>
                             <div class="form-row">
                                 <div class="input-wrapper flex-1">
                                     <input type="text" id="new-range-input" placeholder="e.g. 00:01:00-00:02:30">
                                 </div>
                                 <button type="button" class="btn btn-secondary btn-sm" id="btn-add-range">
                                     <i class="fa-solid fa-plus"></i> Add
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-multi-from-player" title="Add current player position as range">
+                                    <i class="fa-solid fa-play" style="color: #22c55e;"></i> From Player
                                 </button>
                             </div>
                         </div>
@@ -318,11 +321,11 @@
                                 <button type="button" class="btn-text-danger" id="btn-clear-ranges">Clear All</button>
                             </div>
                             <ul class="ranges-list" id="ranges-list-ul">
-                                <li class="range-item">
+                                <li class="range-item" data-range="00:00:30-00:01:45">
                                     <span><i class="fa-regular fa-bookmark"></i> 00:00:30-00:01:45</span>
                                     <button type="button" class="btn-remove-range" onclick="removeRangeItem(this)"><i class="fa-solid fa-xmark"></i></button>
                                 </li>
-                                <li class="range-item">
+                                <li class="range-item" data-range="00:05:10-00:06:00">
                                     <span><i class="fa-regular fa-bookmark"></i> 00:05:10-00:06:00</span>
                                     <button type="button" class="btn-remove-range" onclick="removeRangeItem(this)"><i class="fa-solid fa-xmark"></i></button>
                                 </li>
@@ -360,6 +363,17 @@
                                         <option value="61">Shorts only (&lt; 61 seconds)</option>
                                         <option value="121">Short clips (&lt; 2 minutes)</option>
                                         <option value="301">Medium clips (&lt; 5 minutes)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group flex-1">
+                                <label for="shorts-max-count"><i class="fa-solid fa-list-ol"></i> Harvest Limit</label>
+                                <div class="select-wrapper">
+                                    <select id="shorts-max-count">
+                                        <option value="10">Latest 10 Shorts</option>
+                                        <option value="25" selected>Latest 25 Shorts</option>
+                                        <option value="50">Latest 50 Shorts</option>
+                                        <option value="all">All Available Shorts</option>
                                     </select>
                                 </div>
                             </div>
@@ -441,11 +455,24 @@
                         <div class="form-group">
                             <label for="convert-input"><i class="fa-regular fa-file"></i> Full Path to Input File</label>
                             <div class="input-wrapper">
-                                <input type="text" id="convert-input" placeholder="input_media_file.mkv" required>
-                                <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('convert-input')" title="Select Input File/Folder">
-                                    <i class="fa-solid fa-folder-tree"></i> Browse...
+                                <input type="text" id="convert-input" placeholder="Select or paste media file (MKV, MOV, WEBM, AVI)..." required>
+                                <button type="button" class="btn-browse-folder" onclick="browseFileForInput('convert-input', 'convert-name')" title="Select Input Video File">
+                                    <i class="fa-solid fa-file-video"></i> Browse File...
                                 </button>
                                 <button type="button" class="btn-paste" onclick="pasteClipboard('convert-input')"><i class="fa-regular fa-clipboard"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <label for="convert-preset"><i class="fa-solid fa-sliders"></i> Conversion Profile</label>
+                                <div class="select-wrapper">
+                                    <select id="convert-preset">
+                                        <option value="copy" selected>⚡ Ultra-Fast Remux (Lossless Stream Copy - Instant)</option>
+                                        <option value="h264">🎬 Universal H.264 / AAC (Re-encode - High Quality)</option>
+                                        <option value="audio">🔊 Extract Audio Only (MP3)</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 
@@ -454,7 +481,7 @@
                             <div class="input-wrapper">
                                 <input type="text" id="convert-name" placeholder="converted_video" value="converted_clip">
                             </div>
-                            <span class="field-hint">File will be compiled and saved as .mp4 on your Desktop.</span>
+                            <span class="field-hint">File will be compiled into your downloads directory and ready for instant playback or download.</span>
                         </div>
                     </div>
 
@@ -519,12 +546,12 @@
                         <!-- Thumbnail Live Preview Card -->
                         <div class="thumbnail-preview-card hidden" id="thumbnail-preview-card">
                             <div class="thumb-img-wrapper">
-                                <img id="thumb-preview-img" src="" alt="YouTube Thumbnail Preview">
+                                <img id="thumb-preview-img" src="" alt="YouTube Thumbnail Preview" onerror="if (!this.src.includes('hqdefault')) this.src = this.src.replace('maxresdefault.jpg', 'hqdefault.jpg')">
                             </div>
                             <div class="thumb-card-actions">
-                                <a id="thumb-download-link" class="btn btn-secondary btn-sm" download="thumbnail.jpg" target="_blank">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadThumbnailImage()">
                                     <i class="fa-solid fa-download"></i> Download JPG
-                                </a>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -536,7 +563,7 @@
                         <div class="form-group">
                             <label for="mirror-source"><i class="fa-regular fa-folder"></i> Export Source Folder</label>
                             <div class="input-wrapper">
-                                <input type="text" id="mirror-source" value="source_clips">
+                                <input type="text" id="mirror-source" value="downloads">
                                 <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('mirror-source')" title="Select Export Source Folder">
                                     <i class="fa-solid fa-folder-tree"></i> Browse...
                                 </button>
@@ -546,7 +573,7 @@
                         <div class="form-group">
                             <label for="mirror-dest"><i class="fa-solid fa-hard-drive"></i> Destination HDD Folder</label>
                             <div class="input-wrapper">
-                                <input type="text" id="mirror-dest" value="backup_destination">
+                                <input type="text" id="mirror-dest" placeholder="e.g. E:\Backups\Clips or D:\MediaBackup">
                                 <button type="button" class="btn-browse-folder" onclick="browseFolderForInput('mirror-dest')" title="Select HDD Destination Folder">
                                     <i class="fa-solid fa-folder-tree"></i> Browse...
                                 </button>
@@ -554,10 +581,16 @@
                         </div>
 
                         <div class="form-group">
-                            <label><i class="fa-solid fa-shield-halved"></i> Robocopy Settings</label>
-                            <div class="robocopy-flags-box">
-                                <code>/MIR /R:1 /W:1 /NFL /NDL /NJH /NJS</code>
-                                <p class="field-hint margin-top-xs">Mirrors directory structure, removes extra files from HDD, retries once on lock.</p>
+                            <label for="mirror-mode"><i class="fa-solid fa-shield-halved"></i> Sync Mode</label>
+                            <div class="select-wrapper">
+                                <select id="mirror-mode" onchange="updateRobocopyMode(this.value)">
+                                    <option value="safe" selected>🛡️ Safe Backup (Copies new/changed files, never deletes files on HDD)</option>
+                                    <option value="mirror">⚠️ Exact Mirror (/MIR - Deletes files on HDD not present in source)</option>
+                                </select>
+                            </div>
+                            <div class="robocopy-flags-box margin-top-xs">
+                                <code id="robocopy-flags-display">/E /XO /R:1 /W:1 /NFL /NDL /NJH /NJS</code>
+                                <p class="field-hint margin-top-xs" id="robocopy-hint-display">Copies subdirectories and newer files without deleting any existing files on your external drive.</p>
                             </div>
                         </div>
                     </div>

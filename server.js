@@ -879,7 +879,7 @@ const server = http.createServer((req, res) => {
 
                 console.log(`[Server Extracting In-Memory Transcript]: ${url}`);
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd(url)} --write-auto-sub --sub-lang en --skip-download -o "-" "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-lang "en.*,en" --skip-download -o "-" "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
                     const rawOutput = (stdout || '') + (stderr || '');
@@ -967,6 +967,29 @@ const server = http.createServer((req, res) => {
             console.log(`[Server Folder Selected]: "${selectedPath}"`);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, folderPath: selectedPath }));
+        });
+        return;
+    }
+
+    // API Select File Endpoint (Opens Native Windows File Dialog Box on Windows)
+    if (pathname === '/api/select-file' && req.method === 'POST') {
+        if (process.platform !== 'win32') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, isCloud: true, error: 'Cloud server mode' }));
+        }
+
+        console.log('[Server Opening Windows File Dialog...]');
+        const psCommand = `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Media Files (*.mkv;*.mov;*.avi;*.webm;*.flv;*.mp4;*.wmv)|*.mkv;*.mov;*.avi;*.webm;*.flv;*.mp4;*.wmv|All Files (*.*)|*.*'; $f.Title = 'Select Video File to Convert'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }"`;
+
+        exec(psCommand, { maxBuffer: 1024 * 1024 * 2, windowsHide: false, timeout: 60000 }, (error, stdout, stderr) => {
+            if (error || !stdout || !stdout.trim()) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, error: 'File selection canceled or unavailable' }));
+            }
+            const selectedPath = stdout.trim().split(/[\r\n]+/)[0].trim();
+            console.log(`[Server File Selected]: "${selectedPath}"`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, filePath: selectedPath }));
         });
         return;
     }

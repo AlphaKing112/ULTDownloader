@@ -183,19 +183,54 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnAddRange = document.getElementById('btn-add-range');
     const btnClearRanges = document.getElementById('btn-clear-ranges');
     const rangesListUl = document.getElementById('ranges-list-ul');
+    const btnMultiFromPlayer = document.getElementById('btn-multi-from-player');
+
+    function addRangeToList(rawVal) {
+        const val = (rawVal || '').trim();
+        if (!val) return;
+        
+        const li = document.createElement('li');
+        li.className = 'range-item';
+        li.dataset.range = val;
+        li.innerHTML = `<span><i class="fa-regular fa-bookmark"></i> ${escapeHtml(val)}</span>
+                        <button type="button" class="btn-remove-range" onclick="this.parentElement.remove(); updateGeneratedCommand();"><i class="fa-solid fa-xmark"></i></button>`;
+        rangesListUl.appendChild(li);
+        if (newRangeInput) newRangeInput.value = '';
+        updateGeneratedCommand();
+    }
 
     if (btnAddRange && newRangeInput) {
-        btnAddRange.addEventListener('click', () => {
-            const val = newRangeInput.value.trim();
-            if (!val) return;
-            
-            const li = document.createElement('li');
-            li.className = 'range-item';
-            li.innerHTML = `<span><i class="fa-regular fa-bookmark"></i> ${val}</span>
-                            <button type="button" class="btn-remove-range" onclick="this.parentElement.remove(); updateGeneratedCommand();"><i class="fa-solid fa-xmark"></i></button>`;
-            rangesListUl.appendChild(li);
-            newRangeInput.value = '';
-            updateGeneratedCommand();
+        btnAddRange.addEventListener('click', () => addRangeToList(newRangeInput.value));
+        newRangeInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addRangeToList(newRangeInput.value);
+            }
+        });
+    }
+
+    if (btnMultiFromPlayer) {
+        btnMultiFromPlayer.addEventListener('click', () => {
+            let currentSec = 0;
+            let captured = false;
+            if (activePlayerType === 'youtube' && ytPlayerInstance && typeof ytPlayerInstance.getCurrentTime === 'function') {
+                currentSec = ytPlayerInstance.getCurrentTime();
+                captured = true;
+            } else if (activePlayerType === 'twitch' && twitchPlayerInstance && typeof twitchPlayerInstance.getCurrentTime === 'function') {
+                currentSec = twitchPlayerInstance.getCurrentTime();
+                captured = true;
+            }
+            if (!captured) {
+                logToConsole('[Multi-Section] Load and play a video in the player to capture timestamps directly.', 'system');
+                return;
+            }
+            const startStr = formatSecondsToHHMMSS(currentSec);
+            const endStr = formatSecondsToHHMMSS(currentSec + 60);
+            if (newRangeInput) {
+                newRangeInput.value = `${startStr}-${endStr}`;
+                newRangeInput.focus();
+            }
+            logToConsole(`[Multi-Section] Captured player range: ${startStr}-${endStr} (Click Add to confirm)`, 'info');
         });
     }
 
@@ -999,14 +1034,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             case 'tab-multi-section': {
                 const url = document.getElementById('multi-url').value.trim() || '<VIDEO_URL>';
-                const outDir = document.getElementById('multi-output').value;
-                const items = Array.from(rangesListUl.querySelectorAll('.range-item span')).map(s => s.textContent.replace(' ', ''));
+                const outDir = document.getElementById('multi-output').value.trim() || 'downloads/yt-sections';
+                const items = Array.from(rangesListUl.querySelectorAll('.range-item')).map(li => {
+                    return li.dataset.range || li.querySelector('span')?.textContent.replace(/^[\s\S]*?(\d{2}:\d{2}:\d{2}-\d{2}:\d{2}:\d{2})/, '$1').trim();
+                }).filter(Boolean);
                 
+                const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
                 if (items.length === 0) {
-                    cmd = `# Add time ranges above. Example batch download:\nyt-dlp --js-runtimes node --newline "${url}" --download-sections "*00:01:00-00:02:30" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\clip_00-01-00-00-02-30.mp4"`;
+                    cmd = `yt-dlp${impersonate} --js-runtimes node --newline "${url}" --download-sections "*00:01:00-00:02:30" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}/clip_00-01-00-00-02-30.%(ext)s"`;
                 } else {
-                    const rangesCmds = items.map(r => `yt-dlp --js-runtimes node --newline "${url}" --download-sections "*${r}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\clip_${r.replace(/:/g, '-')}.mp4"`).join(' && \n');
-                    cmd = `mkdir "${outDir}" 2>nul\n${rangesCmds}`;
+                    const rangesCmds = items.map(r => `yt-dlp${impersonate} --js-runtimes node --newline "${url}" --download-sections "*${r}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}/clip_${r.replace(/:/g, '-')}.%(ext)s"`).join(' && ');
+                    cmd = `if not exist "${outDir}" mkdir "${outDir}" && ${rangesCmds}`;
                 }
                 break;
             }
@@ -1016,29 +1054,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (channel.startsWith('@')) {
                     channel = `https://www.youtube.com/${channel}`;
                 }
-                const maxDur = document.getElementById('shorts-duration').value;
-                const outDir = document.getElementById('shorts-output').value;
-                const useArchive = document.getElementById('shorts-archive-check').checked;
+                if (/youtube\.com\/@[^/]+$/i.test(channel)) {
+                    channel = `${channel}/shorts`;
+                }
+                const maxDur = document.getElementById('shorts-duration')?.value || '61';
+                const maxCount = document.getElementById('shorts-max-count')?.value || '25';
+                const outDir = document.getElementById('shorts-output')?.value || 'downloads/shorts';
+                const useArchive = document.getElementById('shorts-archive-check')?.checked;
                 
-                const archiveFlag = useArchive ? `--download-archive "${outDir}\\downloaded.txt"` : '';
-                cmd = `yt-dlp --js-runtimes node --sleep-requests 1.5 --extractor-args "youtube:player_client=android_vr,web_creator" --newline "${channel}" --match-filter "duration < ${maxDur}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}\\%(title)s - %(id)s.%(ext)s" ${archiveFlag}`;
+                const archiveFlag = useArchive ? ` --download-archive "${outDir}/downloaded.txt"` : '';
+                const limitFlag = maxCount !== 'all' ? ` --playlist-end ${maxCount}` : '';
+                cmd = `yt-dlp --js-runtimes node --sleep-requests 1.5 --extractor-args "youtube:player_client=android_vr,web_creator" --newline "${channel}" --match-filter "duration < ${maxDur}"${limitFlag} -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outDir}/%(title)s - %(id)s.%(ext)s"${archiveFlag}`;
                 break;
             }
 
             case 'tab-silence-cutter': {
                 const url = document.getElementById('silence-url').value.trim() || '<VIDEO_URL>';
-                const db = document.getElementById('silence-db').value;
-                const margin = document.getElementById('silence-margin').value;
+                const db = document.getElementById('silence-db')?.value || '-33';
+                const margin = document.getElementById('silence-margin')?.value || '50';
                 const titleVal = document.getElementById('silence-title')?.value.trim();
-                const filename = titleVal ? sanitizeFilename(titleVal) : 'temp_input';
-                cmd = `yt-dlp --js-runtimes node --newline -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${filename}.%(ext)s" "${url}" && auto-editor "${filename}.mp4" --edit audio:${db}dB --margin ${margin}`;
+                const filename = titleVal ? sanitizeFilename(titleVal) : 'silence_clip';
+                const rawPath = `downloads/${filename}_raw.mp4`;
+                const cutPath = `downloads/${filename}_cut.mp4`;
+                cmd = `yt-dlp --js-runtimes node --newline -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${rawPath}" "${url}" && auto-editor "${rawPath}" --edit audio:${db}dB --margin ${margin} --output "${cutPath}"`;
                 break;
             }
 
             case 'tab-file-converter': {
-                const input = document.getElementById('convert-input').value.trim() || 'C:\\path\\to\\input.mkv';
+                const input = document.getElementById('convert-input').value.trim() || 'input_media.mkv';
                 const outName = document.getElementById('convert-name').value.trim() || 'converted_clip';
-                cmd = `ffmpeg -i "${input}" -c:v libx264 -c:a aac -strict experimental "%USERPROFILE%\\Desktop\\${outName}.mp4"`;
+                const preset = document.getElementById('convert-preset')?.value || 'copy';
+                let ffmpegFlags = '-c copy -movflags +faststart';
+                let outExt = 'mp4';
+                if (preset === 'h264') {
+                    ffmpegFlags = '-c:v libx264 -preset fast -crf 20 -c:a aac -b:a 192k -movflags +faststart';
+                } else if (preset === 'audio') {
+                    ffmpegFlags = '-vn -c:a libmp3lame -q:a 2';
+                    outExt = 'mp3';
+                }
+                cmd = `ffmpeg -y -i "${input}" ${ffmpegFlags} "downloads/${outName}.${outExt}"`;
                 break;
             }
 
@@ -1049,7 +1103,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (mode === 'tags') {
                     cmd = `yt-dlp -j "${url}" | jq -r ".tags // [\\"No tags\\"] | join(\\", \\")"`;
                 } else {
-                    cmd = `yt-dlp --write-auto-sub --skip-download --sub-lang en "${url}" && powershell -Command "Get-Content '*.vtt' | Select-String '^[^0-9]' | Out-File transcript.txt" && python analyze_transcript.py`;
+                    cmd = `yt-dlp --write-sub --write-auto-sub --skip-download --sub-lang "en.*,en" "${url}" && powershell -Command "Get-Content '*.vtt' | Select-String '^[^0-9]' | Out-File transcript.txt" && python analyze_transcript.py`;
                 }
                 break;
             }
@@ -1058,14 +1112,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const url = document.getElementById('thumb-url').value.trim() || '<VIDEO_URL>';
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
                 const outName = titleVal ? sanitizeFilename(titleVal) : '%(title)s';
-                cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "${outName}" "${url}"`;
+                cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/${outName}" "${url}"`;
                 break;
             }
 
             case 'tab-hdd-mirror': {
-                const src = document.getElementById('mirror-source').value.trim();
-                const dest = document.getElementById('mirror-dest').value.trim();
-                cmd = `robocopy "${src}" "${dest}" /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS`;
+                const src = document.getElementById('mirror-source').value.trim() || 'downloads';
+                const dest = document.getElementById('mirror-dest').value.trim() || 'D:\\ClipsBackup';
+                const mode = document.getElementById('mirror-mode')?.value || 'safe';
+                const flags = mode === 'mirror' ? '/MIR /R:1 /W:1 /NFL /NDL /NJH /NJS' : '/E /XO /R:1 /W:1 /NFL /NDL /NJH /NJS';
+                cmd = `robocopy "${src}" "${dest}" ${flags}`;
                 break;
             }
         }
@@ -1577,10 +1633,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isTaskRunning) return;
         activeFileHandle = null;
 
-        const downloadTabs = ['tab-quick-download', 'tab-section-clipper', 'tab-silence-cutter', 'tab-file-converter', 'tab-multi-section', 'tab-shorts-harvest'];
+        const singleFileTabs = ['tab-quick-download', 'tab-section-clipper', 'tab-silence-cutter', 'tab-file-converter'];
 
-        // 1. Open Save As Folder Picker FIRST before initiating download process
-        if (downloadTabs.includes(activeTabId) && typeof window.showSaveFilePicker === 'function') {
+        // 1. Open Save As Folder Picker FIRST before initiating download process (Single-file operations only)
+        if (singleFileTabs.includes(activeTabId) && typeof window.showSaveFilePicker === 'function') {
             let suggestedTitle = '';
             if (activeTabId === 'tab-quick-download') suggestedTitle = document.getElementById('quick-title')?.value.trim();
             else if (activeTabId === 'tab-section-clipper') suggestedTitle = document.getElementById('section-title')?.value.trim();
@@ -1592,6 +1648,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const fmtVal = document.getElementById('quick-format')?.value || '';
                 if (fmtVal.includes('bestaudio') || fmtVal.includes('mp3')) ext = 'mp3';
                 else if (fmtVal.includes('m4a')) ext = 'm4a';
+            } else if (activeTabId === 'tab-file-converter') {
+                const presetVal = document.getElementById('convert-preset')?.value || '';
+                if (presetVal === 'audio') ext = 'mp3';
             }
 
             let suggestedName = suggestedTitle ? sanitizeFilename(suggestedTitle) : 'Video_Clip';
@@ -1831,9 +1890,13 @@ document.addEventListener('DOMContentLoaded', () => {
                                     updateProgressBar(data.percent, data.speed, data.eta);
                                 }
                                 if (data.done) {
-                                    finishProgressBar(data.exitCode === 0);
+                                    const isSuccess = (activeTabId === 'tab-hdd-mirror') ? (typeof data.exitCode === 'number' && data.exitCode < 8) : (data.exitCode === 0);
+                                    finishProgressBar(isSuccess);
+                                    if (activeTabId === 'tab-hdd-mirror' && isSuccess) {
+                                        logToConsole(`[Robocopy] HDD sync completed successfully (Exit Code: ${data.exitCode})!`, 'success');
+                                    }
                                     // downloadToken + fileName come in the same done packet
-                                    if (data.exitCode === 0 && data.downloadToken && data.fileName) {
+                                    if (isSuccess && data.downloadToken && data.fileName) {
                                         const fname = data.fileName;
                                         logToConsole(`[Download Ready] Transferring file from server...`, 'success');
                                         try {
@@ -2069,6 +2132,98 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
+    };
+
+    window.browseFileForInput = async function(inputId, nameInputId) {
+        const inputElem = document.getElementById(inputId);
+        if (!inputElem) return;
+
+        logToConsole('[System] Opening Windows File Browser dialog...', 'system');
+
+        // 1. Try native Windows file dialog via backend API
+        try {
+            const response = await fetch('/api/select-file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.filePath) {
+                    inputElem.value = data.filePath;
+                    inputElem.dispatchEvent(new Event('input'));
+                    if (nameInputId) {
+                        const nameElem = document.getElementById(nameInputId);
+                        if (nameElem) {
+                            const baseName = data.filePath.split(/[\\/]/).pop().replace(/\.[^/.]+$/, '');
+                            nameElem.value = sanitizeFilename(baseName) || 'converted_clip';
+                            nameElem.dispatchEvent(new Event('input'));
+                        }
+                    }
+                    updateGeneratedCommand();
+                    logToConsole(`[File Selected] Input media file set to: "${data.filePath}"`, 'success');
+                    return;
+                }
+            }
+        } catch (err) {}
+
+        // 2. Browser file input fallback
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'video/*,.mkv,.mov,.avi,.webm,.flv,.mp4';
+        fileInput.onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                inputElem.value = file.name;
+                inputElem.dispatchEvent(new Event('input'));
+                if (nameInputId) {
+                    const nameElem = document.getElementById(nameInputId);
+                    if (nameElem) {
+                        const baseName = file.name.replace(/\.[^/.]+$/, '');
+                        nameElem.value = sanitizeFilename(baseName) || 'converted_clip';
+                        nameElem.dispatchEvent(new Event('input'));
+                    }
+                }
+                updateGeneratedCommand();
+                logToConsole(`[File Selected] Selected local file: "${file.name}"`, 'info');
+            }
+        };
+        fileInput.click();
+    };
+
+    window.downloadThumbnailImage = async function() {
+        const img = document.getElementById('thumb-preview-img');
+        if (!img || !img.src) return;
+        const titleVal = document.getElementById('thumb-title')?.value.trim() || 'thumbnail';
+        const filename = `${sanitizeFilename(titleVal) || 'thumbnail'}.jpg`;
+        try {
+            const res = await fetch(img.src);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            logToConsole(`[Thumbnail] Successfully saved "${filename}"!`, 'success');
+        } catch (e) {
+            window.open(img.src, '_blank');
+        }
+    };
+
+    window.updateRobocopyMode = function(mode) {
+        const flagsElem = document.getElementById('robocopy-flags-display');
+        const hintElem = document.getElementById('robocopy-hint-display');
+        if (mode === 'mirror') {
+            if (flagsElem) flagsElem.textContent = '/MIR /R:1 /W:1 /NFL /NDL /NJH /NJS';
+            if (hintElem) hintElem.innerHTML = '<span style="color:#ef4444;font-weight:600;"><i class="fa-solid fa-triangle-exclamation"></i> Warning:</span> Mirrors source exactly. Any files on your HDD destination not present in source will be permanently deleted.';
+        } else {
+            if (flagsElem) flagsElem.textContent = '/E /XO /R:1 /W:1 /NFL /NDL /NJH /NJS';
+            if (hintElem) hintElem.innerHTML = '🛡️ Copies subdirectories and newer files without deleting any existing files on your external drive.';
+        }
+        updateGeneratedCommand();
     };
 
     window.setDesktopPreset = function(inputId) {
