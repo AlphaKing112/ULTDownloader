@@ -11,6 +11,12 @@ const downloadTokens = new Map();
 
 let PORT = parseInt(process.env.PORT, 10) || 3005;
 const PUBLIC_DIR = __dirname;
+const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
+if (!fs.existsSync(DOWNLOADS_DIR)) {
+    try {
+        fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+    } catch (e) {}
+}
 
 function getCookiesFlag(url = '') {
     // ONLY apply YouTube cookies for YouTube links! (Prevents breaking Twitch, Kick, TikTok, etc.)
@@ -594,25 +600,12 @@ const server = http.createServer((req, res) => {
 
                 res.writeHead(200, {
                     'Content-Type': 'application/x-ndjson; charset=utf-8',
-                    'Cache-Control': 'no-cache',
-                    'Connection': 'keep-alive'
+                    'Cache-Control': 'no-cache, no-transform',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no'
                 });
 
                 const child = exec(finalCommand, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
-
-                let childKilled = false;
-                req.on('close', () => {
-                    if (!child.killed && !childKilled) {
-                        childKilled = true;
-                        try {
-                            if (process.platform === 'win32') {
-                                exec(`taskkill /pid ${child.pid} /T /F`, () => {});
-                            } else {
-                                child.kill('SIGKILL');
-                            }
-                        } catch (e) {}
-                    }
-                });
 
                 let hasInvalidCookies = false;
 
