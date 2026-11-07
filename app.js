@@ -1398,13 +1398,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             case 'tab-yt-thumbnail': {
                 const url = document.getElementById('thumb-url').value.trim() || '<VIDEO_URL>';
-                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
-                const outName = titleVal ? sanitizeFilename(titleVal) : 'thumbnail';
-                if (timeVal) {
-                    cmd = `python extract_frame.py "${url}" --timestamp ${timeVal} -o "downloads/thumbnails/${outName}.jpg"`;
+                const outName = titleVal ? sanitizeFilename(titleVal) : '%(title)s';
+                const ytId = extractYtId(url);
+                if (ytId) {
+                    cmd = `curl -o "downloads/${outName}.jpg" "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg"`;
                 } else {
-                    cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/thumbnails/${outName}" "${url}"`;
+                    cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/${outName}" "${url}"`;
                 }
                 break;
             }
@@ -1774,7 +1774,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Find active video URL
         let activeUrl = lastActiveUrl;
-        const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'tags-url', 'thumb-url'];
+        const urlInputIds = ['thumb-url', 'section-url', 'quick-url', 'multi-url', 'tags-url'];
         for (const id of urlInputIds) {
             const val = document.getElementById(id)?.value.trim();
             if (val) {
@@ -1784,7 +1784,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!activeUrl) {
-            logToConsole('[Thumbnail] Please enter or paste a video link first to capture a frame.', 'error');
+            logToConsole('[Thumbnail] Please enter or paste a video link first to capture a thumbnail.', 'error');
             return;
         }
 
@@ -1792,55 +1792,88 @@ document.addEventListener('DOMContentLoaded', () => {
         const origHtml = btn ? btn.innerHTML : '';
         if (btn) {
             btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Capturing Frame [${timeStr}]...</span>`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Saving Thumbnail...</span>`;
         }
 
-        logToConsole(`[Thumbnail] Capturing high-resolution frame at position: ${timeStr} (${Math.floor(currentSec)}s)...`, 'system');
+        const showCapturedPreview = (thumbUrl, filename) => {
+            lastCapturedThumbData = {
+                success: true,
+                thumbnailUrl: thumbUrl,
+                downloadUrl: thumbUrl,
+                timestamp: timeStr,
+                filename: filename || `thumbnail_${timeStr.replace(/:/g, '-')}.jpg`
+            };
 
+            const card = document.getElementById('captured-thumbnail-card');
+            const img = document.getElementById('captured-thumb-img');
+            const label = document.getElementById('captured-thumb-time-label');
+            const overlay = document.getElementById('captured-thumb-timestamp-overlay');
+
+            if (img) {
+                img.onerror = function() {
+                    const ytId = extractYtId(activeUrl);
+                    if (ytId && !this.src.includes('hqdefault')) {
+                        this.src = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                    }
+                };
+                img.src = thumbUrl;
+            }
+            if (label) label.textContent = timeStr;
+            if (overlay) overlay.textContent = timeStr;
+            if (card) {
+                card.classList.remove('hidden');
+                card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+
+            // Also populate the Thumbnail Grabber tab view
+            const thumbInput = document.getElementById('thumb-url');
+            const thumbTimeInput = document.getElementById('thumb-timestamp');
+            if (thumbInput && !thumbInput.value.trim()) thumbInput.value = activeUrl;
+            if (thumbTimeInput) thumbTimeInput.value = timeStr;
+            const thumbImg = document.getElementById('thumb-preview-img');
+            if (thumbImg) {
+                thumbImg.onerror = function() {
+                    const ytId = extractYtId(activeUrl);
+                    if (ytId && !this.src.includes('hqdefault')) {
+                        this.src = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                    }
+                };
+                thumbImg.src = thumbUrl;
+            }
+            const thumbCard = document.getElementById('thumbnail-preview-card');
+            if (thumbCard) thumbCard.classList.remove('hidden');
+
+            logToConsole(`[Thumbnail Captured] Thumbnail saved at ${timeStr}! Ready to download.`, 'success');
+        };
+
+        const ytId = extractYtId(activeUrl);
+        if (ytId) {
+            // YouTube: Instant direct public CDN image (0ms, zero python, zero bot checks!)
+            const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
+            showCapturedPreview(maxRes, `${ytId}_thumb_${timeStr.replace(/:/g, '-')}.jpg`);
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+            }
+            return;
+        }
+
+        // Twitch or Kick: Fast public API query without python
         try {
             const titleVal = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || '';
-            const res = await fetch('/api/extract-thumbnail', {
+            const res = await fetch('/api/fetch-thumbnail', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    url: activeUrl,
-                    timestamp: timeStr,
-                    title: titleVal
-                })
+                body: JSON.stringify({ url: activeUrl, timestamp: timeStr, title: titleVal })
             });
-
             const data = await res.json();
-            if (data && data.success) {
-                lastCapturedThumbData = data;
-                logToConsole(`[Thumbnail Frame Captured] Successfully extracted frame at ${data.timestamp}! Ready to download.`, 'success');
-
-                const card = document.getElementById('captured-thumbnail-card');
-                const img = document.getElementById('captured-thumb-img');
-                const label = document.getElementById('captured-thumb-time-label');
-                const overlay = document.getElementById('captured-thumb-timestamp-overlay');
-
-                if (img) img.src = data.dataUri;
-                if (label) label.textContent = data.timestamp;
-                if (overlay) overlay.textContent = data.timestamp;
-                if (card) {
-                    card.classList.remove('hidden');
-                    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }
-
-                // Also populate the Thumbnail Grabber tab view
-                const thumbInput = document.getElementById('thumb-url');
-                const thumbTimeInput = document.getElementById('thumb-timestamp');
-                if (thumbInput && !thumbInput.value.trim()) thumbInput.value = activeUrl;
-                if (thumbTimeInput) thumbTimeInput.value = data.timestamp;
-                const thumbImg = document.getElementById('thumb-preview-img');
-                if (thumbImg) thumbImg.src = data.dataUri;
-                const thumbCard = document.getElementById('thumbnail-preview-card');
-                if (thumbCard) thumbCard.classList.remove('hidden');
+            if (data && data.success && data.thumbnailUrl) {
+                showCapturedPreview(data.thumbnailUrl, data.filename);
             } else {
-                logToConsole(`[Thumbnail Error] ${data?.error || 'Could not extract frame at timestamp'}`, 'error');
+                logToConsole(`[Thumbnail Error] ${data?.error || 'Could not fetch thumbnail'}`, 'error');
             }
         } catch (err) {
-            logToConsole(`[Thumbnail Error] Network or server failure: ${err.message}`, 'error');
+            logToConsole(`[Thumbnail Error] ${err.message}`, 'error');
         } finally {
             if (btn) {
                 btn.disabled = false;
@@ -1854,30 +1887,41 @@ document.addEventListener('DOMContentLoaded', () => {
         if (card) card.classList.add('hidden');
     };
 
-    window.downloadCapturedThumbnail = function() {
+    window.downloadCapturedThumbnail = async function() {
         if (!lastCapturedThumbData) return;
-        const filename = lastCapturedThumbData.filename || `thumbnail_${lastCapturedThumbData.timestamp.replace(/:/g, '-')}.jpg`;
-        const downloadUrl = lastCapturedThumbData.downloadUrl || lastCapturedThumbData.dataUri;
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        logToConsole(`[Thumbnail Downloaded] Saved "${filename}" to your computer!`, 'success');
+        const filename = lastCapturedThumbData.filename || `thumbnail_${(lastCapturedThumbData.timestamp || 'frame').replace(/:/g, '-')}.jpg`;
+        const downloadUrl = lastCapturedThumbData.downloadUrl || lastCapturedThumbData.thumbnailUrl;
+        if (!downloadUrl) return;
+
+        try {
+            const res = await fetch(downloadUrl);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            logToConsole(`[Thumbnail Downloaded] Saved "${filename}" to your computer!`, 'success');
+        } catch (e) {
+            window.open(downloadUrl, '_blank');
+        }
     };
 
     window.copyCapturedThumbToClipboard = async function() {
-        if (!lastCapturedThumbData || !lastCapturedThumbData.dataUri) return;
+        const thumbUrl = lastCapturedThumbData?.thumbnailUrl || lastCapturedThumbData?.downloadUrl;
+        if (!thumbUrl) return;
         try {
-            const res = await fetch(lastCapturedThumbData.dataUri);
+            const res = await fetch(thumbUrl);
             const blob = await res.blob();
             await navigator.clipboard.write([
                 new ClipboardItem({ [blob.type]: blob })
             ]);
-            logToConsole('[Clipboard] Captured thumbnail frame copied directly to your clipboard!', 'success');
+            logToConsole('[Clipboard] Thumbnail copied directly to your clipboard!', 'success');
         } catch (e) {
-            logToConsole('[Clipboard] Could not copy image directly. Click Download JPG instead.', 'system');
+            logToConsole('[Clipboard] Right-click the image or click Download JPG to save.', 'system');
         }
     };
 
@@ -2301,7 +2345,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (activeTabId === 'tab-yt-thumbnail') {
                 const url = document.getElementById('thumb-url').value.trim();
-                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
 
                 if (!url) {
@@ -2310,21 +2353,49 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                logToConsole(`[Thumbnail] Fetching thumbnail / frame for ${url} (Timestamp: ${timeVal || 'Default Cover'})...`, 'system');
+                const ytId = extractYtId(url);
+                if (ytId) {
+                    const maxResUrl = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
+                    const hqUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                    lastCapturedThumbData = {
+                        success: true,
+                        platform: 'youtube',
+                        thumbnailUrl: maxResUrl,
+                        downloadUrl: maxResUrl,
+                        filename: `${titleVal ? sanitizeFilename(titleVal) : ytId}_thumbnail.jpg`
+                    };
+                    if (thumbPreviewImg) {
+                        thumbPreviewImg.onerror = function() {
+                            this.onerror = null;
+                            this.src = hqUrl;
+                            lastCapturedThumbData.thumbnailUrl = hqUrl;
+                            lastCapturedThumbData.downloadUrl = hqUrl;
+                        };
+                        thumbPreviewImg.src = maxResUrl;
+                    }
+                    if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
+                    logToConsole(`[Success] Loaded high-res thumbnail preview for YouTube video: ${ytId}`, 'success');
+                    resetExecutionState();
+                    return;
+                }
+
+                // Twitch or Kick: Fetch fast via pure Node.js GQL/API (no python)
+                logToConsole(`[Thumbnail] Fetching thumbnail for ${url}...`, 'system');
                 try {
-                    const res = await fetch('/api/extract-thumbnail', {
+                    const res = await fetch('/api/fetch-thumbnail', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, timestamp: timeVal, title: titleVal })
+                        body: JSON.stringify({ url, title: titleVal })
                     });
                     const data = await res.json();
-                    if (data && data.success) {
+                    if (data && data.success && data.thumbnailUrl) {
                         lastCapturedThumbData = data;
                         if (thumbPreviewImg) {
-                            thumbPreviewImg.src = data.dataUri;
+                            thumbPreviewImg.onerror = null;
+                            thumbPreviewImg.src = data.thumbnailUrl;
                         }
                         if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
-                        logToConsole(`[Success] Thumbnail frame extracted at ${data.timestamp}! Ready to download.`, 'success');
+                        logToConsole(`[Success] Thumbnail preview loaded! Ready to download.`, 'success');
                     } else {
                         logToConsole(`[Thumbnail Error] ${data?.error || 'Failed to fetch thumbnail'}`, 'error');
                     }

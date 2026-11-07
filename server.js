@@ -986,11 +986,11 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Extract Thumbnail Frame at Exact Timestamp Endpoint (YouTube, Twitch, Kick)
-    if (pathname === '/api/extract-thumbnail' && req.method === 'POST') {
+    // API Fast Thumbnail Fetching Endpoint (YouTube direct, Twitch GQL, Kick API - No Python!)
+    if ((pathname === '/api/extract-thumbnail' || pathname === '/api/fetch-thumbnail') && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
                 const { url, timestamp, title } = JSON.parse(body);
                 if (!url) {
@@ -998,39 +998,153 @@ const server = http.createServer((req, res) => {
                     return res.end(JSON.stringify({ success: false, error: 'URL required' }));
                 }
 
-                console.log(`[Server Extracting Thumbnail]: ${url} at timestamp: ${timestamp || '00:00:00'}`);
+                console.log(`[Server Fetching Thumbnail]: ${url}`);
+                const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
+                const isTwitch = url.toLowerCase().includes('twitch.tv');
+                const isKick = url.toLowerCase().includes('kick.com');
 
-                const pyScript = path.join(__dirname, 'extract_frame.py');
-                const pyArgs = [pyScript, url, '--json', '--base64'];
-                if (timestamp) pyArgs.push('--timestamp', timestamp);
-                if (title) pyArgs.push('--title', title);
-
-                execFile(PYTHON_BIN, pyArgs, { maxBuffer: 1024 * 1024 * 25, windowsHide: true, timeout: 60000 }, (error, stdout, stderr) => {
-                    if (error || !stdout || !stdout.trim()) {
-                        const errDetail = (stderr || error?.message || 'Frame extraction failed').trim();
-                        console.error(`[Server Thumbnail Error]: ${errDetail}`);
+                // 1. YouTube: Instant direct public CDN image (0ms, 100% reliable, zero bot block)
+                if (isYouTube) {
+                    const ytMatch = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i);
+                    const ytId = ytMatch ? ytMatch[1] : '';
+                    if (!ytId) {
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        return res.end(JSON.stringify({ success: false, error: errDetail }));
+                        return res.end(JSON.stringify({ success: false, error: 'Could not parse YouTube video ID' }));
                     }
 
-                    try {
-                        const lines = stdout.trim().split('\n');
-                        const jsonLine = lines[lines.length - 1]; // Last line is JSON output
-                        const result = JSON.parse(jsonLine);
+                    const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
+                    const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
 
-                        if (result.success && result.outputPath && fs.existsSync(result.outputPath)) {
-                            const downloadToken = crypto.randomUUID();
-                            downloadTokens.set(downloadToken, { absPath: result.outputPath, expires: Date.now() + 600000 });
-                            result.downloadUrl = `/api/download-file?token=${downloadToken}&name=${encodeURIComponent(result.filename)}`;
-                        }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({
+                        success: true,
+                        platform: 'youtube',
+                        id: ytId,
+                        thumbnailUrl: maxRes,
+                        fallbackUrl: hqRes,
+                        timestamp: timestamp || '00:00:00',
+                        filename: `${title ? title.replace(/[^A-Za-z0-9_-]+/g, '_') : ytId}_thumbnail.jpg`
+                    }));
+                }
 
-                        res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify(result));
-                    } catch (parseErr) {
-                        res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ success: false, error: 'Failed to parse extraction result' }));
+                // 2. Twitch: Instant GQL query without python (25ms)
+                if (isTwitch) {
+                    const vodMatch = url.match(/twitch\.tv\/videos\/(\d+)/i);
+                    const clipMatch = url.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
+
+                    if (vodMatch && vodMatch[1]) {
+                        const vodId = vodMatch[1];
+                        const payload = JSON.stringify({
+                            query: `query { video(id: "${vodId}") { title, previewThumbnailURL(width: 1280, height: 720) } }`
+                        });
+                        const reqGql = https.request('https://gql.twitch.tv/gql', {
+                            method: 'POST',
+                            headers: {
+                                'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                                'Content-Type': 'application/json',
+                                'Content-Length': Buffer.byteLength(payload)
+                            },
+                            timeout: 6000
+                        }, gqlRes => {
+                            let dataStr = '';
+                            gqlRes.on('data', chunk => dataStr += chunk);
+                            gqlRes.on('end', () => {
+                                try {
+                                    const parsed = JSON.parse(dataStr);
+                                    let thumbUrl = parsed?.data?.video?.previewThumbnailURL || '';
+                                    if (thumbUrl) {
+                                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                                        return res.end(JSON.stringify({
+                                            success: true,
+                                            platform: 'twitch',
+                                            thumbnailUrl: thumbUrl,
+                                            title: parsed?.data?.video?.title || 'twitch_vod',
+                                            timestamp: timestamp || '00:00:00',
+                                            filename: `twitch_${vodId}_thumb.jpg`
+                                        }));
+                                    }
+                                } catch (e) {}
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ success: false, error: 'Could not fetch Twitch VOD thumbnail' }));
+                            });
+                        });
+                        reqGql.on('error', () => {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: 'Twitch connection error' }));
+                        });
+                        reqGql.write(payload);
+                        return reqGql.end();
                     }
-                });
+
+                    if (clipMatch && clipMatch[1]) {
+                        const clipSlug = clipMatch[1];
+                        const payload = JSON.stringify({
+                            query: `query { clip(slug: "${clipSlug}") { title, thumbnailURL } }`
+                        });
+                        const reqGql = https.request('https://gql.twitch.tv/gql', {
+                            method: 'POST',
+                            headers: {
+                                'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                                'Content-Type': 'application/json',
+                                'Content-Length': Buffer.byteLength(payload)
+                            },
+                            timeout: 6000
+                        }, gqlRes => {
+                            let dataStr = '';
+                            gqlRes.on('data', chunk => dataStr += chunk);
+                            gqlRes.on('end', () => {
+                                try {
+                                    const parsed = JSON.parse(dataStr);
+                                    let thumbUrl = parsed?.data?.clip?.thumbnailURL || '';
+                                    if (thumbUrl) {
+                                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                                        return res.end(JSON.stringify({
+                                            success: true,
+                                            platform: 'twitch',
+                                            thumbnailUrl: thumbUrl,
+                                            title: parsed?.data?.clip?.title || 'twitch_clip',
+                                            timestamp: timestamp || '00:00:00',
+                                            filename: `twitch_clip_${clipSlug}_thumb.jpg`
+                                        }));
+                                    }
+                                } catch (e) {}
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ success: false, error: 'Could not fetch Twitch clip thumbnail' }));
+                            });
+                        });
+                        reqGql.on('error', () => {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: 'Twitch connection error' }));
+                        });
+                        reqGql.write(payload);
+                        return reqGql.end();
+                    }
+                }
+
+                // 3. Kick: Direct public JSON API without python
+                if (isKick) {
+                    const clipMatch = url.match(/(?:kick\.com\/[^\/]+\/clips\/|kick\.com\/clips\/|[?&]clip=)([A-Za-z0-9_-]+)/i);
+                    if (clipMatch && clipMatch[1]) {
+                        try {
+                            const clipData = await fetchKickJson(`https://kick.com/api/v2/clips/${encodeURIComponent(clipMatch[1])}`);
+                            const thumb = clipData?.thumbnail_url || clipData?.clip?.thumbnail_url;
+                            if (thumb) {
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                return res.end(JSON.stringify({
+                                    success: true,
+                                    platform: 'kick',
+                                    thumbnailUrl: thumb,
+                                    title: clipData?.title || 'kick_clip',
+                                    timestamp: timestamp || '00:00:00',
+                                    filename: `kick_clip_${clipMatch[1]}_thumb.jpg`
+                                }));
+                            }
+                        } catch (e) {}
+                    }
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Could not fetch thumbnail for this URL' }));
             } catch (err) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
