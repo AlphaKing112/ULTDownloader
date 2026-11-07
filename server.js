@@ -393,6 +393,73 @@ async function fetchTwitchChannelVideos(username, type, range = 'all', page = 1)
     });
 }
 
+// --- Direct Clip Video Stream Preview Cache ---
+const clipPreviewCache = new Map(); // slug -> { expires, url }
+const CLIP_PREVIEW_CACHE_MS = 30 * 60 * 1000;
+
+async function fetchTwitchClipPreviewUrl(slug) {
+    const cleanSlug = String(slug || '').trim().replace(/^.*\/clip\//, '').replace(/\?.*$/, '');
+    if (!cleanSlug) throw new Error('Clip slug required');
+    const cached = clipPreviewCache.get(cleanSlug);
+    if (cached && cached.expires > Date.now()) return cached.url;
+
+    const deviceId = crypto.randomBytes(16).toString('hex');
+    const payload = JSON.stringify({
+        query: `query {
+          clip(slug: "${cleanSlug.replace(/"/g, '')}") {
+            playbackAccessToken(params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) {
+              value
+              signature
+            }
+            videoQualities {
+              quality
+              sourceURL
+            }
+          }
+        }`
+    });
+
+    return new Promise((resolve, reject) => {
+        const req = https.request('https://gql.twitch.tv/gql', {
+            method: 'POST',
+            headers: {
+                'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                'X-Device-Id': deviceId,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload)
+            },
+            timeout: 7000
+        }, res => {
+            let b = '';
+            res.on('data', c => b += c);
+            res.on('end', () => {
+                try {
+                    const data = JSON.parse(b);
+                    const clip = data.data?.clip;
+                    if (!clip || !clip.playbackAccessToken || !clip.videoQualities?.length) {
+                        return reject(new Error('Clip playback stream not found'));
+                    }
+                    const token = encodeURIComponent(clip.playbackAccessToken.value);
+                    const sig = clip.playbackAccessToken.signature;
+                    // Prefer 480 or 360 for high-performance instant thumbnail hover preview
+                    const q = clip.videoQualities.find(v => v.quality === '480') ||
+                              clip.videoQualities.find(v => v.quality === '360') ||
+                              clip.videoQualities[clip.videoQualities.length - 1];
+                    const directUrl = `${q.sourceURL}?sig=${sig}&token=${token}`;
+                    clipPreviewCache.set(cleanSlug, { expires: Date.now() + CLIP_PREVIEW_CACHE_MS, url: directUrl });
+                    resolve(directUrl);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Twitch clip preview timeout')); });
+        req.write(payload);
+        req.end();
+    });
+}
+
 const MIME_TYPES = {
     '.html': 'text/html',
     '.css': 'text/css',
@@ -549,6 +616,32 @@ const server = http.createServer((req, res) => {
             console.error(`[Server Channel Browser Error]: ${err.message}`);
             sendJson(200, { success: false, platform, username, type, range, error: err.message });
         });
+        return;
+    }
+
+    // API Direct Clip Preview (High-Performance HTML5 MP4 Stream URL)
+    if (pathname === '/api/clip-preview' && req.method === 'GET') {
+        const slug = (parsedUrl.searchParams.get('slug') || '').trim();
+        const platform = (parsedUrl.searchParams.get('platform') || 'twitch').toLowerCase();
+
+        if (!slug) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: 'Slug parameter is required' }));
+        }
+
+        if (platform === 'twitch') {
+            fetchTwitchClipPreviewUrl(slug).then(previewUrl => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, platform, slug, previewUrl }));
+            }).catch(err => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message }));
+            });
+            return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Platform not supported for direct preview' }));
         return;
     }
 

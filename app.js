@@ -613,24 +613,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let channelPreviewMuted = true;
+    const clipDirectUrlCache = new Map(); // slug -> direct MP4 url
 
     function setupThumbnailHoverPreview(thumbElem, video, platform, type) {
         if (!thumbElem || !video) return;
 
         let hoverTimer = null;
+        let cycleTimer = null;
         let stopTimer = null;
+        let resumeCycleTimer = null;
+        let isScrubbing = false;
         let previewContainer = null;
 
         function cleanupPreview() {
-            if (hoverTimer) {
-                clearTimeout(hoverTimer);
-                hoverTimer = null;
-            }
-            if (stopTimer) {
-                clearTimeout(stopTimer);
-                stopTimer = null;
-            }
+            if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+            if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
+            if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
+            if (resumeCycleTimer) { clearTimeout(resumeCycleTimer); resumeCycleTimer = null; }
             if (previewContainer && previewContainer.parentNode) {
+                const vid = previewContainer.querySelector('video');
+                if (vid) {
+                    try {
+                        vid.pause();
+                        vid.removeAttribute('src');
+                        vid.load();
+                    } catch (e) {}
+                }
                 previewContainer.remove();
                 previewContainer = null;
             }
@@ -640,94 +648,152 @@ document.addEventListener('DOMContentLoaded', () => {
             cleanupPreview();
 
             hoverTimer = setTimeout(() => {
-                const currentHost = window.location.hostname || 'localhost';
-                let parentParams = '&parent=localhost&parent=127.0.0.1';
-                if (currentHost && currentHost !== 'localhost' && currentHost !== '127.0.0.1') {
-                    parentParams += `&parent=${encodeURIComponent(currentHost)}`;
+                const isClip = type === 'clips' || /(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)/i.test(video.url || '');
+                const duration = Math.floor(video.duration || 0);
+
+                // Build storyboard frames for VODs / Highlights
+                let rawThumb = (video.thumbnail || '').replace(/%\{width\}x%\{height\}/gi, '640x360');
+                let frames = [];
+
+                if (rawThumb && /thumb\d+/i.test(rawThumb)) {
+                    frames = [
+                        rawThumb.replace(/thumb\d+/i, 'thumb0'),
+                        rawThumb.replace(/thumb\d+/i, 'thumb1'),
+                        rawThumb.replace(/thumb\d+/i, 'thumb2'),
+                        rawThumb.replace(/thumb\d+/i, 'thumb3')
+                    ];
+                } else if (rawThumb) {
+                    frames = [rawThumb];
                 }
-
-                let previewSrc = '';
-                const mutedParam = channelPreviewMuted ? 'true' : 'false';
-
-                if (platform === 'twitch') {
-                    const clipMatch = (video.url || '').match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
-                    if (type === 'clips' || clipMatch) {
-                        const clipId = (clipMatch && clipMatch[1]) ? clipMatch[1] : video.id;
-                        previewSrc = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}${parentParams}&autoplay=true&muted=${mutedParam}`;
-                    } else {
-                        const vodMatch = (video.url || '').match(/twitch\.tv\/videos\/(\d+)/i);
-                        const rawId = (vodMatch && vodMatch[1]) ? vodMatch[1] : (video.id || '');
-                        const vodId = 'v' + String(rawId).replace(/^v/, '');
-                        previewSrc = `https://player.twitch.tv/?video=${encodeURIComponent(vodId)}${parentParams}&autoplay=true&muted=${mutedParam}&time=0h0m0s`;
-                    }
-                } else if (platform === 'kick') {
-                    if (type === 'clips') {
-                        const clipId = video.id;
-                        previewSrc = `https://player.kick.com/clips/${encodeURIComponent(clipId)}?autoplay=true&muted=${mutedParam}`;
-                    } else {
-                        const uuid = video.id;
-                        previewSrc = `https://player.kick.com/videos/${encodeURIComponent(uuid)}?autoplay=true&muted=${mutedParam}`;
-                    }
-                }
-
-                if (!previewSrc) return;
-
-                const thumbRect = thumbElem.getBoundingClientRect();
-                const thumbWidth = thumbRect.width || thumbElem.clientWidth || 280;
-                const scale = (thumbWidth / 640).toFixed(4);
 
                 previewContainer = document.createElement('div');
                 previewContainer.className = 'channel-preview-container';
-                previewContainer.innerHTML = `
-                    <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Preview (15s)</div>
-                    <div class="channel-preview-scaler" style="transform: scale(${scale});">
-                        <iframe src="${previewSrc}" width="640" height="360" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen="false"></iframe>
-                    </div>
-                    <button type="button" class="channel-preview-vol-btn${channelPreviewMuted ? '' : ' unmuted'}" title="${channelPreviewMuted ? 'Turn on sound' : 'Mute sound'}">
-                        <i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>
-                    </button>
-                    <div class="channel-preview-bar"></div>
-                `;
 
-                // Volume toggle button in bottom right
-                const volBtn = previewContainer.querySelector('.channel-preview-vol-btn');
-                if (volBtn) {
-                    volBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        channelPreviewMuted = !channelPreviewMuted;
-                        volBtn.classList.toggle('unmuted', !channelPreviewMuted);
-                        volBtn.title = channelPreviewMuted ? 'Turn on sound' : 'Mute sound';
-                        volBtn.innerHTML = `<i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>`;
+                if (isClip && platform === 'twitch') {
+                    // --- High-Performance Direct Clip HTML5 Video Preview ---
+                    const clipMatch = (video.url || '').match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
+                    const slug = (clipMatch && clipMatch[1]) ? clipMatch[1] : (video.id || '');
 
-                        const iframe = previewContainer.querySelector('iframe');
-                        if (iframe && iframe.src) {
-                            iframe.src = iframe.src.replace(/muted=(true|false)/gi, `muted=${channelPreviewMuted ? 'true' : 'false'}`);
-                        }
+                    previewContainer.innerHTML = `
+                        <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Clip Preview</div>
+                        <video class="channel-preview-video" ${channelPreviewMuted ? 'muted' : ''} autoplay loop playsinline></video>
+                        <button type="button" class="channel-preview-vol-btn${channelPreviewMuted ? '' : ' unmuted'}" title="${channelPreviewMuted ? 'Turn on sound' : 'Mute sound'}">
+                            <i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>
+                        </button>
+                        <div class="channel-preview-bar animated"></div>
+                    `;
 
-                        // Reset 15s timer & progress bar on volume click so user gets full 15s with sound
-                        if (stopTimer) {
-                            clearTimeout(stopTimer);
-                            stopTimer = setTimeout(() => {
-                                cleanupPreview();
-                            }, 15000);
+                    const videoElem = previewContainer.querySelector('video');
+                    const volBtn = previewContainer.querySelector('.channel-preview-vol-btn');
+
+                    if (volBtn && videoElem) {
+                        volBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            channelPreviewMuted = !channelPreviewMuted;
+                            videoElem.muted = channelPreviewMuted;
+                            volBtn.classList.toggle('unmuted', !channelPreviewMuted);
+                            volBtn.title = channelPreviewMuted ? 'Turn on sound' : 'Mute sound';
+                            volBtn.innerHTML = `<i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>`;
+                        });
+                    }
+
+                    function loadClipVideo(srcUrl) {
+                        if (!videoElem || !srcUrl) return;
+                        videoElem.src = srcUrl;
+                        videoElem.play().catch(() => {});
+                    }
+
+                    if (clipDirectUrlCache.has(slug)) {
+                        loadClipVideo(clipDirectUrlCache.get(slug));
+                    } else if (slug) {
+                        fetch(`/api/clip-preview?platform=twitch&slug=${encodeURIComponent(slug)}`)
+                            .then(r => r.json())
+                            .then(data => {
+                                if (data && data.success && data.previewUrl) {
+                                    clipDirectUrlCache.set(slug, data.previewUrl);
+                                    loadClipVideo(data.previewUrl);
+                                }
+                            })
+                            .catch(() => {});
+                    }
+                } else {
+                    // --- Live Storyboard Scrub & Animated Preview (VODs / Highlights) ---
+                    const initFrame = frames[0] || rawThumb;
+                    const durationStr = duration > 0 ? `00:00:00 (0%)` : 'Preview';
+
+                    previewContainer.innerHTML = `
+                        <div class="channel-preview-badge"><i class="fa-solid fa-film"></i> Preview</div>
+                        <div class="channel-preview-timestamp">${escapeHtml(durationStr)}</div>
+                        <img class="channel-preview-frame" src="${escapeAttr(initFrame)}" alt="Preview">
+                        <div class="channel-preview-bar"></div>
+                    `;
+
+                    const frameImg = previewContainer.querySelector('.channel-preview-frame');
+                    const timeBadge = previewContainer.querySelector('.channel-preview-timestamp');
+                    const bar = previewContainer.querySelector('.channel-preview-bar');
+
+                    let currentFrameIdx = 0;
+                    const validFrames = [initFrame];
+
+                    // Preload additional storyboard frames and filter to valid ones
+                    if (frames.length > 1) {
+                        for (let i = 1; i < frames.length; i++) {
+                            const fUrl = frames[i];
+                            const testImg = new Image();
+                            testImg.onload = () => {
+                                if (!validFrames.includes(fUrl)) {
+                                    validFrames.push(fUrl);
+                                    validFrames.sort();
+                                }
+                            };
+                            testImg.src = fUrl;
                         }
-                        const bar = previewContainer.querySelector('.channel-preview-bar');
-                        if (bar) {
-                            bar.style.animation = 'none';
-                            void bar.offsetWidth; // trigger reflow
-                            bar.style.animation = 'previewProgress 15s linear forwards';
+                    }
+
+                    function setFrame(idx, percent = null) {
+                        if (!validFrames.length || !frameImg) return;
+                        currentFrameIdx = idx % validFrames.length;
+                        frameImg.src = validFrames[currentFrameIdx];
+
+                        const p = percent !== null ? percent : (currentFrameIdx / Math.max(1, validFrames.length - 1));
+                        if (bar) bar.style.width = `${Math.min(100, Math.max(0, p * 100)).toFixed(1)}%`;
+
+                        if (timeBadge && duration > 0) {
+                            const curSec = Math.floor(p * duration);
+                            timeBadge.textContent = `${formatSecondsToHHMMSS(curSec)} (${Math.round(p * 100)}%)`;
                         }
+                    }
+
+                    // Auto-cycle through frames every 1.2 seconds
+                    cycleTimer = setInterval(() => {
+                        if (isScrubbing) return;
+                        setFrame((currentFrameIdx + 1) % validFrames.length);
+                    }, 1200);
+
+                    // Interactive horizontal scrub on mouse movement
+                    previewContainer.addEventListener('mousemove', (e) => {
+                        isScrubbing = true;
+                        const rect = previewContainer.getBoundingClientRect();
+                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                        const pct = rect.width > 0 ? (x / rect.width) : 0;
+                        const frameIdx = Math.min(validFrames.length - 1, Math.floor(pct * validFrames.length));
+                        setFrame(frameIdx, pct);
+
+                        if (resumeCycleTimer) clearTimeout(resumeCycleTimer);
+                        resumeCycleTimer = setTimeout(() => {
+                            isScrubbing = false;
+                        }, 1400);
                     });
                 }
 
                 thumbElem.appendChild(previewContainer);
 
-                // Stop preview automatically after 15 seconds
+                // Auto-cleanup preview after 20 seconds of continuous hover
                 stopTimer = setTimeout(() => {
                     cleanupPreview();
-                }, 15000);
-            }, 200); // 200ms hover debounce
+                }, 20000);
+            }, 180); // 180ms hover debounce
         });
 
         thumbElem.addEventListener('mouseleave', () => {
