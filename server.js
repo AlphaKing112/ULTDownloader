@@ -146,13 +146,17 @@ async function fetchKickChannelVideos(username, type, range = 'all', cursor = nu
 }
 
 let twitchIntegrityCache = null;
+let twitchIntegrityPromise = null;
 
 function getTwitchIntegrityHeaders() {
     if (twitchIntegrityCache && twitchIntegrityCache.expires > Date.now()) {
         return Promise.resolve(twitchIntegrityCache.headers);
     }
+    if (twitchIntegrityPromise) {
+        return twitchIntegrityPromise;
+    }
 
-    return new Promise((resolve) => {
+    twitchIntegrityPromise = new Promise((resolve) => {
         const deviceId = crypto.randomBytes(16).toString('hex');
         const fallbackHeaders = {
             'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
@@ -197,7 +201,11 @@ function getTwitchIntegrityHeaders() {
         req.on('error', () => resolve(fallbackHeaders));
         req.on('timeout', () => { req.destroy(); resolve(fallbackHeaders); });
         req.end();
+    }).finally(() => {
+        twitchIntegrityPromise = null;
     });
+
+    return twitchIntegrityPromise;
 }
 
 async function fetchTwitchChannelVideos(username, type, range = 'all', page = 1) {
@@ -591,6 +599,20 @@ const server = http.createServer((req, res) => {
                 });
 
                 const child = exec(finalCommand, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
+
+                let childKilled = false;
+                req.on('close', () => {
+                    if (!child.killed && !childKilled) {
+                        childKilled = true;
+                        try {
+                            if (process.platform === 'win32') {
+                                exec(`taskkill /pid ${child.pid} /T /F`, () => {});
+                            } else {
+                                child.kill('SIGKILL');
+                            }
+                        } catch (e) {}
+                    }
+                });
 
                 let hasInvalidCookies = false;
 

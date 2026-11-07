@@ -213,14 +213,15 @@ body {
     box-shadow: 0 0 8px var(--accent-amber);
 }
 
-/* Dashboard Grid Layout */
+/* Dashboard Grid Layout (Clean 2-Column Responsive View) */
 .dashboard-grid {
     display: grid;
-    grid-template-columns: minmax(360px, 440px) minmax(0, 1fr) minmax(260px, 320px);
-    gap: 20px;
+    grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+    gap: 22px;
     align-items: start;
 }
 
+.control-panel,
 .controls-panel {
     min-width: 0;
     width: 100%;
@@ -234,26 +235,10 @@ body {
     width: 100%;
 }
 
-.status-panel {
-    min-width: 0;
-    width: 100%;
-}
-
-@media (max-width: 1400px) {
-    .dashboard-grid {
-        grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
-    }
-    .status-panel {
-        grid-column: span 2;
-    }
-}
-
 @media (max-width: 1100px) {
     .dashboard-grid {
         grid-template-columns: 1fr;
-    }
-    .status-panel {
-        grid-column: span 1;
+        gap: 16px;
     }
 }
 
@@ -1229,50 +1214,7 @@ input[type="number"] {
     font-family: 'JetBrains Mono', monospace;
 }
 
-/* Status & Metadata Panel */
-.status-metrics {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.metric-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px;
-    background: var(--bg-main);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-color);
-}
-
-.metric-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-
-.dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-}
-
-.dot.connected { background-color: var(--status-connected); }
-.dot.viewing { background-color: var(--status-viewing); }
-.dot.info-dot { background-color: var(--accent-cyan); }
-
-.metric-value {
-    font-weight: 700;
-    font-size: 13px;
-}
-
-.metric-value.highlight {
-    color: var(--accent-purple-light);
-}
-
+/* Extracted Metadata Card (YouTube Tags & Transcript) */
 .extracted-meta-card {
     background: var(--bg-main);
     border: 1px solid var(--border-color);
@@ -1330,23 +1272,6 @@ input[type="number"] {
     max-height: 100px;
     overflow-y: auto;
     white-space: pre-line;
-}
-
-.contact-card {
-    background: var(--bg-main);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 16px;
-    margin-top: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.card-desc {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.4;
 }
 
 /* Modal Overlay */

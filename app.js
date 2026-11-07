@@ -12,10 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const copyLogBtn = document.getElementById('copy-log-btn');
     const generatedCliCode = document.getElementById('generated-cli-code');
     
-    // Status metrics
-    const valTaskStatus = document.getElementById('val-task-status');
-    const valCurrentMode = document.getElementById('val-current-mode');
-    const valBackendMode = document.getElementById('val-backend-mode');
+    // Status & Backend indicators
     const backendStatusIndicator = document.getElementById('backend-status-indicator');
     const backendStatusText = document.getElementById('backend-status-text');
 
@@ -133,8 +130,6 @@ document.addEventListener('DOMContentLoaded', () => {
             optionBadge.textContent = meta.optionBadge;
             headerIcon.className = `fa-solid ${meta.icon} header-icon`;
             actionBtn.querySelector('span').textContent = meta.btnText;
-            valCurrentMode.textContent = meta.title.split(' ')[0] + ' ' + (meta.title.split(' ')[1] || '');
-            document.getElementById('power-tip-desc').textContent = meta.tip;
         }
 
         updateGeneratedCommand();
@@ -720,6 +715,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function selectChannelVideo(video) {
         if (!video || !sectionUrlInput) return;
+        if (activeTabId !== 'tab-section-clipper') {
+            activateTab('tab-section-clipper');
+        }
         const titleElem = document.getElementById('section-title');
         const startElem = document.getElementById('section-start');
         const endElem = document.getElementById('section-end');
@@ -1533,7 +1531,6 @@ document.addEventListener('DOMContentLoaded', () => {
             actionBtn.disabled = false;
             actionBtn.style.opacity = '1';
         }
-        if (valTaskStatus) valTaskStatus.textContent = 'Idle';
     }
 
     function getTargetOutputFileForCheck() {
@@ -1671,7 +1668,6 @@ document.addEventListener('DOMContentLoaded', () => {
             isTaskRunning = true;
             actionBtn.disabled = true;
             actionBtn.style.opacity = '0.7';
-            valTaskStatus.textContent = 'Running...';
 
             if (activeTabId === 'tab-yt-thumbnail') {
                 const url = document.getElementById('thumb-url').value.trim();
@@ -2102,7 +2098,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 isServerConnected = true;
                 backendStatusIndicator.className = 'status-indicator online';
                 backendStatusText.textContent = 'Node.js Backend Connected';
-                valBackendMode.textContent = 'Local Server API';
             } else {
                 setBackendOffline();
             }
@@ -2115,7 +2110,6 @@ document.addEventListener('DOMContentLoaded', () => {
         isServerConnected = false;
         backendStatusIndicator.className = 'status-indicator offline';
         backendStatusText.textContent = 'Standalone Client';
-        valBackendMode.textContent = 'CLI Script Mode';
     }
 
     checkBackendHealth();
