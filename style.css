@@ -1776,6 +1776,14 @@ input[type="number"] {
     pointer-events: none;
 }
 
+.transcript-range-row {
+    margin-top: 10px;
+    background: rgba(124, 58, 237, 0.05);
+    border: 1px dashed rgba(167, 139, 250, 0.25);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+}
+
 /* ===== Streamer Media Vault Panel (Positioned below CLI Output & Live Stream) ===== */
 .channel-media-vault-panel {
     background: var(--bg-card);

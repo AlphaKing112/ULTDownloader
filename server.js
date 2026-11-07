@@ -1043,54 +1043,83 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Subtitle & Transcript Fetching Endpoint (Zero Disk Storage!)
+    // API Subtitle & Transcript Fetching Endpoint (YouTube Instant + Local Whisper AI for Twitch/Kick)
     if (pathname === '/api/fetch-transcript' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', () => {
             try {
-                const { url } = JSON.parse(body);
+                const { url, start, end } = JSON.parse(body);
                 if (!url) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ error: 'URL required' }));
                 }
 
-                console.log(`[Server Extracting In-Memory Transcript]: ${url}`);
-                const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-lang "en.*,en" --skip-download -o "-" "${cleanUrl}"`;
+                console.log(`[Server Transcript Request]: ${url} (Range: ${start || '00:00:00'} - ${end || 'Full'})`);
 
-                exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
-                    const rawOutput = (stdout || '') + (stderr || '');
-                    
-                    const lines = rawOutput.split(/[\r\n]+/);
-                    const cleanLines = [];
-                    const seen = new Set();
+                const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
+                const hasRange = Boolean(start && end);
 
-                    lines.forEach(line => {
-                        const trimmed = line.replace(/<[^>]*>/g, '').trim();
-                        if (!trimmed) return;
-                        if (trimmed.startsWith('WEBVTT') || trimmed.startsWith('Kind:') || trimmed.startsWith('Language:') || trimmed.includes('-->')) return;
-                        if (/^\d+$/.test(trimmed)) return;
-                        if (seen.has(trimmed)) return;
+                // If YouTube and NO specific range requested, try instant auto-sub extraction first (takes 100ms!)
+                if (isYouTube && !hasRange) {
+                    const cleanUrl = url.replace(/"/g, '\\"');
+                    const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-lang "en.*,en" --skip-download -o "-" "${cleanUrl}"`;
 
-                        seen.add(trimmed);
-                        cleanLines.push(trimmed);
-                    });
+                    exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
+                        const rawOutput = (stdout || '') + (stderr || '');
+                        const lines = rawOutput.split(/[\r\n]+/);
+                        const cleanLines = [];
+                        const seen = new Set();
 
-                    let transcriptText = cleanLines.length > 0 ? cleanLines.join('\n') : '';
-                    if (!transcriptText) {
-                        if (url.toLowerCase().includes('twitch.tv')) {
-                            transcriptText = 'Twitch does not generate automated speech-to-text transcripts for streams or VODs (unless the broadcaster explicitly enabled closed captions during the live broadcast). Automatic full transcripts are currently provided natively on YouTube.';
-                        } else if (url.toLowerCase().includes('kick.com')) {
-                            transcriptText = 'Kick does not generate automated subtitles or transcripts for VODs. Automatic full transcripts are currently provided natively on YouTube.';
-                        } else {
-                            transcriptText = 'No automatic transcript subtitles found for this video.';
+                        lines.forEach(line => {
+                            const trimmed = line.replace(/<[^>]*>/g, '').trim();
+                            if (!trimmed) return;
+                            if (trimmed.startsWith('WEBVTT') || trimmed.startsWith('Kind:') || trimmed.startsWith('Language:') || trimmed.includes('-->')) return;
+                            if (/^\d+$/.test(trimmed)) return;
+                            if (seen.has(trimmed)) return;
+
+                            seen.add(trimmed);
+                            cleanLines.push(trimmed);
+                        });
+
+                        if (cleanLines.length > 5) {
+                            console.log(`[Server YouTube Auto-Sub Extracted]: ${cleanLines.length} subtitle lines`);
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            return res.end(JSON.stringify({ success: true, transcript: cleanLines.join('\n'), source: 'youtube-autosub' }));
                         }
-                    }
-                    console.log(`[Server Transcript Extracted]: ${cleanLines.length} subtitle lines`);
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true, transcript: transcriptText }));
-                });
+
+                        // Fallback to local Whisper AI if YouTube had no subtitles
+                        runWhisperTranscription();
+                    });
+                } else {
+                    // Twitch, Kick, or YouTube range selections: Run local offline Whisper AI!
+                    runWhisperTranscription();
+                }
+
+                function runWhisperTranscription() {
+                    console.log(`[Server Running Local Whisper AI]: ${url}`);
+                    const pyArgs = [path.join(__dirname, 'transcribe_whisper.py'), url];
+                    if (start) pyArgs.push('--start', start);
+                    if (end) pyArgs.push('--end', end);
+
+                    execFile(PYTHON_BIN, pyArgs, { windowsHide: true, timeout: 240000, maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+                        if (err || !stdout || !stdout.trim()) {
+                            const errMsg = (stderr || err?.message || 'Whisper transcription failed').trim();
+                            console.error(`[Server Whisper Error]: ${errMsg}`);
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            return res.end(JSON.stringify({ success: false, error: errMsg }));
+                        }
+                        try {
+                            const result = JSON.parse(stdout.trim());
+                            console.log(`[Server Whisper Success]: Generated speech-to-text transcript (${result.language || 'en'})`);
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify(result));
+                        } catch (parseErr) {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, error: 'Could not parse transcription output' }));
+                        }
+                    });
+                }
             } catch (err) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid payload' }));

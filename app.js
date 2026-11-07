@@ -1182,6 +1182,10 @@ document.addEventListener('DOMContentLoaded', () => {
             activeRadio.closest('.radio-card').classList.add('active');
             updateGeneratedCommand();
         }
+        const rangeRow = document.getElementById('transcript-range-row');
+        if (rangeRow) {
+            rangeRow.style.display = mode === 'transcript' ? 'flex' : 'none';
+        }
     };
 
     // --- CLI Command Generator ---
@@ -2018,12 +2022,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         logToConsole('[Error] Failed to connect to metadata service.', 'error');
                     }
                 } else if (mode === 'transcript') {
-                    logToConsole('[AI Transcript] Extracting in-memory transcript key moments...', 'system');
+                    const startVal = (document.getElementById('transcript-start')?.value || '').trim();
+                    const endVal = (document.getElementById('transcript-end')?.value || '').trim();
+                    const hasRange = Boolean(startVal || endVal);
+                    const rangeMsg = hasRange ? ` (${startVal || '00:00:00'} - ${endVal || 'End'})` : '';
+
+                    logToConsole(`[AI Transcript] Generating full speech-to-text transcript${rangeMsg}...`, 'system');
+                    showProgressBar('Transcribing speech with local Whisper AI...');
                     try {
                         const res = await fetch('/api/fetch-transcript', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url: tagsUrl })
+                            body: JSON.stringify({ url: tagsUrl, start: startVal, end: endVal })
                         });
                         const data = await res.json();
                         if (data.success && data.transcript) {
@@ -2033,23 +2043,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
                             if (videoBlock) videoBlock.style.display = 'none';
                             if (channelBlock) channelBlock.style.display = 'none';
-                            if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-brain"></i> AI Subtitles & Transcript';
+                            if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-brain"></i> AI Subtitles & Full Transcript';
 
-                            if (resultsTitle) resultsTitle.textContent = 'AI Transcript Key Moments & Subtitles';
+                            if (resultsTitle) resultsTitle.textContent = 'AI Speech-to-Text Transcript (Local Whisper)';
                             if (resultsIcon) resultsIcon.className = 'fa-solid fa-brain results-icon';
                             if (textBox) textBox.textContent = data.transcript;
                             if (resultsCard) resultsCard.classList.remove('hidden');
 
-                            if (data.transcript.includes('Twitch') || data.transcript.includes('Kick') || data.transcript.includes('No automatic transcript')) {
-                                logToConsole(`[Notice] ${data.transcript}`, 'info');
-                            } else {
-                                logToConsole('[Success] Extracted full transcript directly on-screen!', 'success');
-                            }
+                            logToConsole('[Success] Full speech-to-text transcript generated directly on-screen!', 'success');
                         } else {
-                            logToConsole('[Error] Could not extract transcript subtitles for this video.', 'error');
+                            logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
                         }
                     } catch (e) {
                         logToConsole('[Error] Failed to connect to transcript service.', 'error');
+                    } finally {
+                        hideProgressBar();
                     }
                 }
 
