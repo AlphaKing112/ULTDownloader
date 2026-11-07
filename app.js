@@ -624,12 +624,17 @@ document.addEventListener('DOMContentLoaded', () => {
         let resumeCycleTimer = null;
         let isScrubbing = false;
         let previewContainer = null;
+        let hlsInstance = null;
 
         function cleanupPreview() {
             if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
             if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
             if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
             if (resumeCycleTimer) { clearTimeout(resumeCycleTimer); resumeCycleTimer = null; }
+            if (hlsInstance) {
+                try { hlsInstance.destroy(); } catch (e) {}
+                hlsInstance = null;
+            }
             if (previewContainer && previewContainer.parentNode) {
                 const vid = previewContainer.querySelector('video');
                 if (vid) {
@@ -648,7 +653,7 @@ document.addEventListener('DOMContentLoaded', () => {
             cleanupPreview();
 
             hoverTimer = setTimeout(() => {
-                const isClip = type === 'clips' || /(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)/i.test(video.url || '');
+                const isClip = type === 'clips' || /(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/|\/clips\/)/i.test(video.url || '');
                 const duration = Math.floor(video.duration || 0);
 
                 // Build storyboard frames for VODs / Highlights
@@ -669,14 +674,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewContainer = document.createElement('div');
                 previewContainer.className = 'channel-preview-container';
 
-                if (isClip && platform === 'twitch') {
-                    // --- High-Performance Direct Clip HTML5 Video Preview ---
-                    const clipMatch = (video.url || '').match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/)([A-Za-z0-9_-]+)/i);
+                if (isClip) {
+                    // --- High-Performance Direct Clip HTML5 Video Preview (Twitch & Kick) ---
+                    const clipMatch = (video.url || '').match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^\/]+\/clip\/|\/clips\/)([A-Za-z0-9_-]+)/i);
                     const slug = (clipMatch && clipMatch[1]) ? clipMatch[1] : (video.id || '');
 
                     previewContainer.innerHTML = `
                         <div class="channel-preview-badge"><i class="fa-solid fa-play"></i> Clip Preview</div>
-                        <video class="channel-preview-video" ${channelPreviewMuted ? 'muted' : ''} autoplay loop playsinline></video>
+                        <img class="channel-preview-frame" src="${escapeAttr(rawThumb)}" alt="Preview">
+                        <video class="channel-preview-video" ${channelPreviewMuted ? 'muted' : ''} autoplay loop playsinline style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.25s ease;"></video>
                         <button type="button" class="channel-preview-vol-btn${channelPreviewMuted ? '' : ' unmuted'}" title="${channelPreviewMuted ? 'Turn on sound' : 'Mute sound'}">
                             <i class="fa-solid ${channelPreviewMuted ? 'fa-volume-xmark' : 'fa-volume-high'}"></i>
                         </button>
@@ -684,6 +690,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     `;
 
                     const videoElem = previewContainer.querySelector('video');
+                    const posterImg = previewContainer.querySelector('.channel-preview-frame');
                     const volBtn = previewContainer.querySelector('.channel-preview-vol-btn');
 
                     if (volBtn && videoElem) {
@@ -698,24 +705,47 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                     }
 
-                    function loadClipVideo(srcUrl) {
+                    function startClipPlayback(srcUrl) {
                         if (!videoElem || !srcUrl) return;
-                        videoElem.src = srcUrl;
-                        videoElem.play().catch(() => {});
+
+                        videoElem.oncanplay = () => {
+                            videoElem.style.opacity = '1';
+                        };
+
+                        if (srcUrl.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                            try {
+                                hlsInstance = new Hls({ enableWorker: false });
+                                hlsInstance.loadSource(srcUrl);
+                                hlsInstance.attachMedia(videoElem);
+                                hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                                    videoElem.play().catch(() => {});
+                                });
+                            } catch (hlsErr) {
+                                videoElem.src = srcUrl;
+                                videoElem.play().catch(() => {});
+                            }
+                        } else {
+                            videoElem.src = srcUrl;
+                            videoElem.play().catch(() => {});
+                        }
                     }
 
-                    if (clipDirectUrlCache.has(slug)) {
-                        loadClipVideo(clipDirectUrlCache.get(slug));
-                    } else if (slug) {
+                    if (platform === 'kick' && video.clip_url) {
+                        startClipPlayback(video.clip_url);
+                    } else if (clipDirectUrlCache.has(slug)) {
+                        startClipPlayback(clipDirectUrlCache.get(slug));
+                    } else if (slug && platform === 'twitch') {
                         fetch(`/api/clip-preview?platform=twitch&slug=${encodeURIComponent(slug)}`)
                             .then(r => r.json())
                             .then(data => {
                                 if (data && data.success && data.previewUrl) {
                                     clipDirectUrlCache.set(slug, data.previewUrl);
-                                    loadClipVideo(data.previewUrl);
+                                    startClipPlayback(data.previewUrl);
                                 }
                             })
                             .catch(() => {});
+                    } else if (video.url) {
+                        startClipPlayback(video.url);
                     }
                 } else {
                     // --- Live Storyboard Scrub & Animated Preview (VODs / Highlights) ---

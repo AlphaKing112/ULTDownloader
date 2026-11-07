@@ -122,6 +122,7 @@ async function fetchKickChannelVideos(username, type, range = 'all', cursor = nu
             title: c.title || c.id,
             url: `https://kick.com/${c.channel?.slug || slug}/clips/${c.id}`,
             thumbnail: c.thumbnail_url || '',
+            clip_url: c.clip_url || c.video_url || '',
             duration: Number(c.duration) || 0,
             views: c.views ?? c.view_count ?? null,
             date: c.created_at || null
