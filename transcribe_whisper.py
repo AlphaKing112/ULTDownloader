@@ -7,10 +7,34 @@ import subprocess
 import re
 
 def transcribe_audio(file_path):
-    from faster_whisper import WhisperModel
-    # Utilize available CPU threads for high performance (user has 24 threads)
-    cpu_threads = min(12, os.cpu_count() or 4)
-    model = WhisperModel("base.en", device="cpu", compute_type="int8", cpu_threads=cpu_threads)
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return None, None, "faster-whisper library is not installed in this environment. Please install it with 'pip install faster-whisper'."
+
+    # Detect if running on Render free tier (512MB RAM, throttled CPU)
+    is_render = bool(os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"))
+    
+    if is_render:
+        # tiny.en uses only 39MB disk and ~70MB RAM, ideal for Render free tier 512MB limit
+        model_name = "tiny.en"
+        cpu_threads = 1
+    else:
+        # On local PC with multi-core CPU, utilize base.en with high throughput
+        model_name = "base.en"
+        cpu_threads = min(12, os.cpu_count() or 4)
+
+    try:
+        model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=cpu_threads)
+    except Exception as model_err:
+        # Fallback to tiny.en if base.en failed due to memory
+        if model_name != "tiny.en":
+            try:
+                model = WhisperModel("tiny.en", device="cpu", compute_type="int8", cpu_threads=1)
+            except Exception:
+                return None, None, f"Whisper model load error: {str(model_err)}"
+        else:
+            return None, None, f"Whisper model load error: {str(model_err)}"
     
     # beam_size=1 (greedy search) is 2.5x-3x faster than beam_size=5 with essentially identical accuracy for English
     segments, info = model.transcribe(
@@ -39,7 +63,7 @@ def transcribe_audio(file_path):
         if text:
             lines.append(f"[{start_str} - {end_str}] {text}")
             
-    return "\n".join(lines), info.language
+    return "\n".join(lines), info.language, None
 
 def main():
     parser = argparse.ArgumentParser(description="Local Whisper Transcription for ULT Downloader")
@@ -74,7 +98,9 @@ def main():
             temp_audio = f"{temp_base}.mp3"
 
             ytdlp_cmd = [
-                "yt-dlp", "--no-warnings", "-x", "--audio-format", "mp3",
+                "yt-dlp", "--no-warnings",
+                "-f", "ba/ba*/Audio_Only/bestaudio/worst",
+                "-x", "--audio-format", "mp3",
                 "--concurrent-fragments", "5",
                 "-o", f"{temp_base}.%(ext)s"
             ]
@@ -95,7 +121,7 @@ def main():
             if proc.returncode != 0 and not os.path.exists(temp_audio):
                 err = proc.stderr.strip().split("\n")[-1] or "Audio download failed"
                 print(json.dumps({"success": False, "error": f"yt-dlp error: {err}"}))
-                sys.exit(1)
+                sys.exit(0)
 
             target_file = temp_audio
         else:
@@ -104,9 +130,13 @@ def main():
 
         if not os.path.exists(target_file):
             print(json.dumps({"success": False, "error": "Extracted audio file not found"}))
-            sys.exit(1)
+            sys.exit(0)
 
-        transcript, language = transcribe_audio(target_file)
+        transcript, language, err_msg = transcribe_audio(target_file)
+        if err_msg:
+            print(json.dumps({"success": False, "error": err_msg}))
+            sys.exit(0)
+
         if not transcript.strip():
             transcript = "No spoken words or dialogue detected in this video section."
 
@@ -123,7 +153,7 @@ def main():
 
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
-        sys.exit(1)
+        sys.exit(0)
     finally:
         # Cleanup temp audio
         if temp_audio and os.path.exists(temp_audio):

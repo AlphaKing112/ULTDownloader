@@ -1825,13 +1825,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (success) {
             if (progressFill) progressFill.style.width = '100%';
             if (progressPercentVal) progressPercentVal.textContent = '100%';
-            if (progressStatusTitle) progressStatusTitle.textContent = 'Download Complete!';
+            if (progressStatusTitle) progressStatusTitle.textContent = 'Process Complete!';
         } else {
             if (progressStatusTitle) progressStatusTitle.textContent = 'Process Finished';
         }
         setTimeout(() => {
             if (progressCard) progressCard.classList.add('hidden');
-        }, 3500);
+        }, 3000);
+    }
+
+    function hideProgressBar() {
+        if (progressCard) progressCard.classList.add('hidden');
     }
 
     // --- Overwrite Confirmation Handler ---
@@ -2124,7 +2128,28 @@ document.addEventListener('DOMContentLoaded', () => {
                     const rangeMsg = isFull ? ' (Full Stream)' : (hasRange ? ` (${startVal || '00:00:00'} - ${endVal})` : ' (First 5m Fast Preview)');
 
                     logToConsole(`[AI Transcript] Generating speech-to-text transcript${rangeMsg}...`, 'system');
-                    showProgressBar('Transcribing speech with local Whisper AI...');
+                    showProgressBar('Connecting & preparing audio stream...');
+                    updateProgressBar(8, 'Connecting...', 'Starting');
+
+                    // Active live progress ticker so the progress bar smoothly animates across stages
+                    let progressTicker = null;
+                    let currentProgress = 8;
+                    progressTicker = setInterval(() => {
+                        if (currentProgress < 30) {
+                            currentProgress += 6;
+                            if (progressStatusTitle) progressStatusTitle.textContent = 'Extracting lightweight audio from video...';
+                            updateProgressBar(currentProgress, 'Downloading audio...', 'Processing');
+                        } else if (currentProgress < 75) {
+                            currentProgress += 4;
+                            if (progressStatusTitle) progressStatusTitle.textContent = 'Running Whisper AI speech recognition...';
+                            updateProgressBar(currentProgress, 'Whisper neural decoding...', 'Analyzing');
+                        } else if (currentProgress < 94) {
+                            currentProgress += 1;
+                            if (progressStatusTitle) progressStatusTitle.textContent = 'Compiling dialogue timestamps...';
+                            updateProgressBar(currentProgress, 'Formatting timestamps...', 'Finishing');
+                        }
+                    }, 400);
+
                     try {
                         const res = await fetch('/api/fetch-transcript', {
                             method: 'POST',
@@ -2137,7 +2162,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             })
                         });
                         const data = await res.json();
+                        clearInterval(progressTicker);
+
                         if (data.success && data.transcript) {
+                            updateProgressBar(100, 'Complete', '0s');
+                            finishProgressBar(true);
+
                             const videoBlock = document.getElementById('results-video-tags-block');
                             const channelBlock = document.getElementById('results-channel-tags-block');
                             const bodyHeaderTitle = document.getElementById('results-body-header-title');
@@ -2164,12 +2194,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                             logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
                         } else {
+                            finishProgressBar(false);
                             logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
                         }
                     } catch (e) {
+                        clearInterval(progressTicker);
+                        finishProgressBar(false);
                         logToConsole('[Error] Failed to connect to transcript service.', 'error');
-                    } finally {
-                        hideProgressBar();
                     }
                 }
 

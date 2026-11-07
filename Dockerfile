@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     unzip \
-    && pip install --break-system-packages curl_cffi \
+    && pip install --no-cache-dir --break-system-packages curl_cffi faster-whisper \
     && curl -fsSL https://deno.land/install.sh | sh \
     && cp /root/.deno/bin/deno /usr/local/bin/deno \
     && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \

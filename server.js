@@ -1104,20 +1104,29 @@ const server = http.createServer((req, res) => {
                     if (full) pyArgs.push('--full');
 
                     execFile(PYTHON_BIN, pyArgs, { windowsHide: true, timeout: 240000, maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+                        // Check if python process returned valid JSON on stdout
+                        if (stdout && stdout.trim()) {
+                            try {
+                                const result = JSON.parse(stdout.trim());
+                                if (result.success) {
+                                    console.log(`[Server Whisper Success]: Generated speech-to-text transcript (${result.language || 'en'})`);
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    return res.end(JSON.stringify(result));
+                                } else if (result.error) {
+                                    console.error(`[Server Whisper Reported Error]: ${result.error}`);
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    return res.end(JSON.stringify({ success: false, error: result.error }));
+                                }
+                            } catch (parseErr) {
+                                // Fall through to standard error handler
+                            }
+                        }
+
                         if (err || !stdout || !stdout.trim()) {
                             const errMsg = (stderr || err?.message || 'Whisper transcription failed').trim();
                             console.error(`[Server Whisper Error]: ${errMsg}`);
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             return res.end(JSON.stringify({ success: false, error: errMsg }));
-                        }
-                        try {
-                            const result = JSON.parse(stdout.trim());
-                            console.log(`[Server Whisper Success]: Generated speech-to-text transcript (${result.language || 'en'})`);
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify(result));
-                        } catch (parseErr) {
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ success: false, error: 'Could not parse transcription output' }));
                         }
                     });
                 }
