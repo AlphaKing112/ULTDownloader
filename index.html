@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=2.5">
+    <link rel="stylesheet" href="style.css?v=2.6">
 </head>
 <body>
     <div class="app-container">
@@ -576,19 +576,32 @@
 
                     <!-- TAB 8: YT Thumbnail (Option 11) -->
                     <div class="tool-view" id="tab-yt-thumbnail">
-                        <p class="tool-description">Fetch maximum resolution YouTube video thumbnails, convert to JPG, and preview in browser.</p>
+                        <p class="tool-description">Extract maximum resolution video thumbnails or capture exact frame snapshots at any timestamp across YouTube, Twitch, and Kick.</p>
 
                         <div class="form-group">
-                            <label for="thumb-url"><i class="fa-solid fa-link"></i> YouTube Video Link</label>
+                            <label for="thumb-url"><i class="fa-solid fa-link"></i> Video Link URL (YouTube, Twitch, or Kick)</label>
                             <div class="input-wrapper">
-                                <input type="url" id="thumb-url" placeholder="https://www.youtube.com/watch?v=..." required>
+                                <input type="url" id="thumb-url" placeholder="https://www.youtube.com/watch?v=... or Twitch / Kick URL" required>
                                 <button type="button" class="btn-paste" onclick="pasteClipboard('thumb-url')"><i class="fa-regular fa-clipboard"></i></button>
                             </div>
                         </div>
 
                         <div class="form-group">
                             <div class="label-with-val">
-                                <label for="thumb-title"><i class="fa-solid fa-heading"></i> Write Title</label>
+                                <label for="thumb-timestamp"><i class="fa-regular fa-clock"></i> Frame Timestamp (Optional)</label>
+                                <span class="range-hint">e.g. 01:24:32 (leave blank for default cover)</span>
+                            </div>
+                            <div class="input-wrapper">
+                                <input type="text" id="thumb-timestamp" placeholder="00:00:00 (or leave blank for video cover)">
+                                <button type="button" class="btn-sync-player" onclick="syncThumbnailTimeFromPlayer()" title="Capture timestamp from active player">
+                                    <i class="fa-solid fa-camera"></i> From Player
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-with-val">
+                                <label for="thumb-title"><i class="fa-solid fa-heading"></i> Output Filename / Title</label>
                                 <span class="fetch-status-badge" id="thumb-title-status"></span>
                             </div>
                             <div class="input-wrapper">
@@ -602,11 +615,14 @@
                         <!-- Thumbnail Live Preview Card -->
                         <div class="thumbnail-preview-card hidden" id="thumbnail-preview-card">
                             <div class="thumb-img-wrapper">
-                                <img id="thumb-preview-img" alt="YouTube Thumbnail Preview">
+                                <img id="thumb-preview-img" alt="Video Thumbnail Preview">
                             </div>
                             <div class="thumb-card-actions">
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadThumbnailImage()">
+                                <button type="button" class="btn btn-primary btn-sm" id="thumb-download-btn" onclick="downloadThumbnailImage()">
                                     <i class="fa-solid fa-download"></i> Download JPG
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="sendThumbToClipper()">
+                                    <i class="fa-solid fa-scissors"></i> Send to Clipper
                                 </button>
                             </div>
                         </div>
@@ -688,6 +704,57 @@
                     </div>
                     <div class="player-iframe-container" id="player-iframe-container">
                         <iframe id="twitch-player-iframe" src="" height="280" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>
+                    </div>
+
+                    <!-- Interactive Player Timestamp & Thumbnail Action Bar -->
+                    <div class="player-action-toolbar" id="player-action-toolbar">
+                        <div class="player-time-indicator">
+                            <i class="fa-solid fa-stopwatch text-purple"></i>
+                            <span class="player-time-label">Position:</span>
+                            <span class="player-time-badge" id="player-live-time-display">00:00:00</span>
+                        </div>
+                        <div class="player-toolbar-buttons">
+                            <button type="button" class="btn btn-primary btn-sm btn-capture-thumb" id="btn-player-capture-thumb" onclick="captureThumbnailFromPlayer()" title="Save video frame at this exact timestamp as thumbnail">
+                                <i class="fa-solid fa-camera"></i>
+                                <span>Save Thumbnail at Timestamp</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="markCurrentTimestamp('start')" title="Set as Start Time in Section Clipper">
+                                <i class="fa-solid fa-play" style="color: #22c55e;"></i> <span>Start</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="markCurrentTimestamp('end')" title="Set as End Time in Section Clipper">
+                                <i class="fa-solid fa-stop" style="color: #ef4444;"></i> <span>End</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Captured Thumbnail Frame Preview Card -->
+                    <div class="captured-thumbnail-card hidden" id="captured-thumbnail-card">
+                        <div class="captured-thumb-header">
+                            <div class="captured-thumb-title">
+                                <i class="fa-solid fa-image text-purple"></i>
+                                <span>Captured Frame (<strong id="captured-thumb-time-label">00:00:00</strong>)</span>
+                            </div>
+                            <button type="button" class="btn-icon" onclick="closeCapturedThumb()" title="Close Preview">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                        <div class="captured-thumb-body">
+                            <div class="captured-thumb-img-wrapper">
+                                <img id="captured-thumb-img" alt="Captured Thumbnail Frame">
+                                <div class="captured-thumb-timestamp-overlay" id="captured-thumb-timestamp-overlay">00:00:00</div>
+                            </div>
+                            <div class="captured-thumb-actions">
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-download-captured-thumb" onclick="downloadCapturedThumbnail()">
+                                    <i class="fa-solid fa-download"></i> Download JPG
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-captured-thumb" onclick="copyCapturedThumbToClipboard()">
+                                    <i class="fa-regular fa-copy"></i> Copy Image
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="sendCapturedThumbToClipper()">
+                                    <i class="fa-solid fa-scissors"></i> Clip from Here
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -885,6 +952,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=2.5"></script>
+    <script src="app.js?v=2.6"></script>
 </body>
 </html>

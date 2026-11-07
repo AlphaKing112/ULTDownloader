@@ -986,6 +986,59 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // API Extract Thumbnail Frame at Exact Timestamp Endpoint (YouTube, Twitch, Kick)
+    if (pathname === '/api/extract-thumbnail' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const { url, timestamp, title } = JSON.parse(body);
+                if (!url) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, error: 'URL required' }));
+                }
+
+                console.log(`[Server Extracting Thumbnail]: ${url} at timestamp: ${timestamp || '00:00:00'}`);
+
+                const pyScript = path.join(__dirname, 'extract_frame.py');
+                const pyArgs = [pyScript, url, '--json', '--base64'];
+                if (timestamp) pyArgs.push('--timestamp', timestamp);
+                if (title) pyArgs.push('--title', title);
+
+                execFile(PYTHON_BIN, pyArgs, { maxBuffer: 1024 * 1024 * 25, windowsHide: true, timeout: 60000 }, (error, stdout, stderr) => {
+                    if (error || !stdout || !stdout.trim()) {
+                        const errDetail = (stderr || error?.message || 'Frame extraction failed').trim();
+                        console.error(`[Server Thumbnail Error]: ${errDetail}`);
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        return res.end(JSON.stringify({ success: false, error: errDetail }));
+                    }
+
+                    try {
+                        const lines = stdout.trim().split('\n');
+                        const jsonLine = lines[lines.length - 1]; // Last line is JSON output
+                        const result = JSON.parse(jsonLine);
+
+                        if (result.success && result.outputPath && fs.existsSync(result.outputPath)) {
+                            const downloadToken = crypto.randomUUID();
+                            downloadTokens.set(downloadToken, { absPath: result.outputPath, expires: Date.now() + 600000 });
+                            result.downloadUrl = `/api/download-file?token=${downloadToken}&name=${encodeURIComponent(result.filename)}`;
+                        }
+
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify(result));
+                    } catch (parseErr) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: 'Failed to parse extraction result' }));
+                    }
+                });
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+            }
+        });
+        return;
+    }
+
     // API Full Metadata & Tags Fetching Endpoint
     if (pathname === '/api/fetch-metadata' && req.method === 'POST') {
         let body = '';

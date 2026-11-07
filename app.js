@@ -87,11 +87,11 @@ document.addEventListener('DOMContentLoaded', () => {
             tip: 'Extracts video tags and description or processes auto-generated subtitles.'
         },
         'tab-yt-thumbnail': {
-            title: 'YouTube Thumbnail Grabber',
+            title: 'Thumbnail & Timestamp Frame Grabber',
             optionBadge: 'Option #11',
             icon: 'fa-regular fa-image',
-            btnText: 'Fetch High-Res Thumbnail',
-            tip: 'Extracts maximum resolution thumbnail image directly from video ID.'
+            btnText: 'Capture / Fetch Thumbnail Frame',
+            tip: 'Extracts high-resolution cover thumbnails or exact timestamp frames across YouTube, Twitch, and Kick.'
         },
         'tab-hdd-mirror': {
             title: 'HDD Export Directory Mirror',
@@ -1398,9 +1398,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             case 'tab-yt-thumbnail': {
                 const url = document.getElementById('thumb-url').value.trim() || '<VIDEO_URL>';
+                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
-                const outName = titleVal ? sanitizeFilename(titleVal) : '%(title)s';
-                cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/${outName}" "${url}"`;
+                const outName = titleVal ? sanitizeFilename(titleVal) : 'thumbnail';
+                if (timeVal) {
+                    cmd = `python extract_frame.py "${url}" --timestamp ${timeVal} -o "downloads/thumbnails/${outName}.jpg"`;
+                } else {
+                    cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/thumbnails/${outName}" "${url}"`;
+                }
                 break;
             }
 
@@ -1514,11 +1519,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const isTwitch = url.toLowerCase().includes('twitch.tv');
         const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
+        const isKick = url.toLowerCase().includes('kick.com');
 
         let targetMode = forceMode;
         if (forceMode === 'auto') {
             if (isTwitch) targetMode = 'twitch';
             else if (isYouTube) targetMode = 'youtube';
+            else if (isKick) targetMode = 'kick';
             else targetMode = 'hidden';
         }
 
@@ -1600,6 +1607,38 @@ document.addEventListener('DOMContentLoaded', () => {
                     playerContainer.innerHTML = `<iframe src="https://clips.twitch.tv/embed?clip=${clipId}&parent=${currentHost}&autoplay=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
                 }
             }
+        } else if ((targetMode === 'kick' || targetMode === 'auto') && isKick) {
+            const channelMatch = url.match(/kick\.com\/([A-Za-z0-9_.-]+)/i);
+            const clipMatch = url.match(/(?:kick\.com\/[^\/]+\/clips\/|kick\.com\/clips\/|[?&]clip=)([A-Za-z0-9_-]+)/i);
+            const vodMatch = url.match(/kick\.com\/[^\/]+\/videos\/([A-Za-z0-9_-]+)|kick\.com\/videos\/([A-Za-z0-9_-]+)/i);
+
+            let channelSlug = '';
+            if (channelMatch && !['video', 'videos', 'clips', 'categories'].includes(channelMatch[1].toLowerCase())) {
+                channelSlug = channelMatch[1];
+            }
+
+            const mediaId = (vodMatch && (vodMatch[1] || vodMatch[2])) ? `kick_vod_${vodMatch[1] || vodMatch[2]}` : ((clipMatch && clipMatch[1]) ? `kick_clip_${clipMatch[1]}` : (channelSlug ? `kick_live_${channelSlug}` : 'kick_media'));
+
+            if (activePlayerType === 'kick' && currentEmbeddedMediaId === mediaId && !mediaPlayerCard.classList.contains('hidden')) {
+                return;
+            }
+
+            currentEmbeddedMediaId = mediaId;
+            activePlayerType = 'kick';
+
+            if (mediaPlayerCard) mediaPlayerCard.classList.remove('hidden');
+            if (playerSelector) playerSelector.value = 'kick';
+            if (playerIcon) playerIcon.className = 'fa-solid fa-bolt player-icon kick';
+
+            if (playerTitle) {
+                playerTitle.textContent = channelSlug ? `Kick Player (@${channelSlug})` : 'Kick Media Player';
+            }
+
+            if (playerContainer) {
+                const targetSlug = channelSlug || (clipMatch ? clipMatch[1] : (vodMatch ? (vodMatch[1] || vodMatch[2]) : ''));
+                playerContainer.innerHTML = `<iframe src="https://player.kick.com/${encodeURIComponent(targetSlug)}?autoplay=false&muted=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+            }
+            logToConsole(`[Player] Kick player loaded for: ${url}`, 'info');
         }
     };
 
@@ -1681,20 +1720,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
     }
 
-    window.markCurrentTimestamp = function(targetType = 'start') {
-        let currentSec = 0;
-        let captured = false;
-
+    function getPlayerCurrentTime() {
         if (activePlayerType === 'youtube' && ytPlayerInstance && typeof ytPlayerInstance.getCurrentTime === 'function') {
-            currentSec = ytPlayerInstance.getCurrentTime();
-            captured = true;
-        } else if (activePlayerType === 'twitch' && twitchPlayerInstance && typeof twitchPlayerInstance.getCurrentTime === 'function') {
-            currentSec = twitchPlayerInstance.getCurrentTime();
-            captured = true;
+            try { return ytPlayerInstance.getCurrentTime() || 0; } catch (e) { return 0; }
         }
+        if (activePlayerType === 'twitch' && twitchPlayerInstance && typeof twitchPlayerInstance.getCurrentTime === 'function') {
+            try { return twitchPlayerInstance.getCurrentTime() || 0; } catch (e) { return 0; }
+        }
+        const html5Video = document.querySelector('#player-iframe-container video');
+        if (html5Video && !isNaN(html5Video.currentTime)) {
+            return html5Video.currentTime || 0;
+        }
+        return 0;
+    }
 
-        if (!captured) {
-            logToConsole('[Timestamp] Play a video in the embedded player above to capture exact timestamps.', 'system');
+    // Live Player Position Ticker
+    setInterval(() => {
+        const liveTimeElem = document.getElementById('player-live-time-display');
+        if (!liveTimeElem) return;
+        if (activePlayerType === 'none' || (mediaPlayerCard && mediaPlayerCard.classList.contains('hidden'))) return;
+
+        const sec = getPlayerCurrentTime();
+        if (sec > 0 || ytPlayerInstance || twitchPlayerInstance) {
+            liveTimeElem.textContent = formatSecondsToHHMMSS(sec);
+        }
+    }, 500);
+
+    window.markCurrentTimestamp = function(targetType = 'start') {
+        const currentSec = getPlayerCurrentTime();
+        if (currentSec <= 0 && activePlayerType === 'none') {
+            logToConsole('[Timestamp] Play or scrub the video in the embedded player above to capture exact timestamps.', 'system');
             return;
         }
 
@@ -1707,6 +1762,145 @@ document.addEventListener('DOMContentLoaded', () => {
             targetElem.dispatchEvent(new Event('input'));
             logToConsole(`[Timestamp Marked] Set ${targetType.toUpperCase()} time to player position: ${formattedTime} (${Math.floor(currentSec)}s)`, 'success');
             updateGeneratedCommand();
+        }
+    };
+
+    // --- High-Resolution Frame Thumbnail Capture from Player ---
+    let lastCapturedThumbData = null;
+
+    window.captureThumbnailFromPlayer = async function() {
+        const currentSec = getPlayerCurrentTime();
+        const timeStr = formatSecondsToHHMMSS(currentSec);
+
+        // Find active video URL
+        let activeUrl = lastActiveUrl;
+        const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'tags-url', 'thumb-url'];
+        for (const id of urlInputIds) {
+            const val = document.getElementById(id)?.value.trim();
+            if (val) {
+                activeUrl = val;
+                break;
+            }
+        }
+
+        if (!activeUrl) {
+            logToConsole('[Thumbnail] Please enter or paste a video link first to capture a frame.', 'error');
+            return;
+        }
+
+        const btn = document.getElementById('btn-player-capture-thumb');
+        const origHtml = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Capturing Frame [${timeStr}]...</span>`;
+        }
+
+        logToConsole(`[Thumbnail] Capturing high-resolution frame at position: ${timeStr} (${Math.floor(currentSec)}s)...`, 'system');
+
+        try {
+            const titleVal = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || '';
+            const res = await fetch('/api/extract-thumbnail', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: activeUrl,
+                    timestamp: timeStr,
+                    title: titleVal
+                })
+            });
+
+            const data = await res.json();
+            if (data && data.success) {
+                lastCapturedThumbData = data;
+                logToConsole(`[Thumbnail Frame Captured] Successfully extracted frame at ${data.timestamp}! Ready to download.`, 'success');
+
+                const card = document.getElementById('captured-thumbnail-card');
+                const img = document.getElementById('captured-thumb-img');
+                const label = document.getElementById('captured-thumb-time-label');
+                const overlay = document.getElementById('captured-thumb-timestamp-overlay');
+
+                if (img) img.src = data.dataUri;
+                if (label) label.textContent = data.timestamp;
+                if (overlay) overlay.textContent = data.timestamp;
+                if (card) {
+                    card.classList.remove('hidden');
+                    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+
+                // Also populate the Thumbnail Grabber tab view
+                const thumbInput = document.getElementById('thumb-url');
+                const thumbTimeInput = document.getElementById('thumb-timestamp');
+                if (thumbInput && !thumbInput.value.trim()) thumbInput.value = activeUrl;
+                if (thumbTimeInput) thumbTimeInput.value = data.timestamp;
+                const thumbImg = document.getElementById('thumb-preview-img');
+                if (thumbImg) thumbImg.src = data.dataUri;
+                const thumbCard = document.getElementById('thumbnail-preview-card');
+                if (thumbCard) thumbCard.classList.remove('hidden');
+            } else {
+                logToConsole(`[Thumbnail Error] ${data?.error || 'Could not extract frame at timestamp'}`, 'error');
+            }
+        } catch (err) {
+            logToConsole(`[Thumbnail Error] Network or server failure: ${err.message}`, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+            }
+        }
+    };
+
+    window.closeCapturedThumb = function() {
+        const card = document.getElementById('captured-thumbnail-card');
+        if (card) card.classList.add('hidden');
+    };
+
+    window.downloadCapturedThumbnail = function() {
+        if (!lastCapturedThumbData) return;
+        const filename = lastCapturedThumbData.filename || `thumbnail_${lastCapturedThumbData.timestamp.replace(/:/g, '-')}.jpg`;
+        const downloadUrl = lastCapturedThumbData.downloadUrl || lastCapturedThumbData.dataUri;
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        logToConsole(`[Thumbnail Downloaded] Saved "${filename}" to your computer!`, 'success');
+    };
+
+    window.copyCapturedThumbToClipboard = async function() {
+        if (!lastCapturedThumbData || !lastCapturedThumbData.dataUri) return;
+        try {
+            const res = await fetch(lastCapturedThumbData.dataUri);
+            const blob = await res.blob();
+            await navigator.clipboard.write([
+                new ClipboardItem({ [blob.type]: blob })
+            ]);
+            logToConsole('[Clipboard] Captured thumbnail frame copied directly to your clipboard!', 'success');
+        } catch (e) {
+            logToConsole('[Clipboard] Could not copy image directly. Click Download JPG instead.', 'system');
+        }
+    };
+
+    window.sendCapturedThumbToClipper = function() {
+        if (!lastCapturedThumbData) return;
+        const secStart = document.getElementById('section-start');
+        if (secStart) {
+            secStart.value = lastCapturedThumbData.timestamp;
+            secStart.dispatchEvent(new Event('input'));
+        }
+        activateTab('tab-section-clipper');
+        logToConsole(`[Clipper Synced] Set Section Clipper start time to captured frame: ${lastCapturedThumbData.timestamp}`, 'success');
+    };
+
+    window.syncThumbnailTimeFromPlayer = function() {
+        const sec = getPlayerCurrentTime();
+        const timeStr = formatSecondsToHHMMSS(sec);
+        const thumbTime = document.getElementById('thumb-timestamp');
+        if (thumbTime) {
+            thumbTime.value = timeStr;
+            thumbTime.dispatchEvent(new Event('input'));
+            updateGeneratedCommand();
+            logToConsole(`[Thumbnail] Synced timestamp from player: ${timeStr} (${Math.floor(sec)}s)`, 'success');
         }
     };
 
@@ -2107,20 +2301,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (activeTabId === 'tab-yt-thumbnail') {
                 const url = document.getElementById('thumb-url').value.trim();
-                const ytId = extractYtId(url);
-                if (ytId) {
-                    const maxResUrl = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-                    if (thumbPreviewImg) {
-                        thumbPreviewImg.onerror = function() {
-                            this.onerror = null;
-                            this.src = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-                        };
-                        thumbPreviewImg.src = maxResUrl;
-                    }
-                    if (thumbDownloadLink) thumbDownloadLink.href = maxResUrl;
-                    if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
-                    logToConsole(`[Success] Fetched high-res thumbnail preview for video ID: ${ytId}`, 'success');
+                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
+                const titleVal = document.getElementById('thumb-title')?.value.trim();
+
+                if (!url) {
+                    logToConsole('[Error] Please enter a valid YouTube, Twitch, or Kick URL.', 'error');
+                    resetExecutionState();
+                    return;
                 }
+
+                logToConsole(`[Thumbnail] Fetching thumbnail / frame for ${url} (Timestamp: ${timeVal || 'Default Cover'})...`, 'system');
+                try {
+                    const res = await fetch('/api/extract-thumbnail', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, timestamp: timeVal, title: titleVal })
+                    });
+                    const data = await res.json();
+                    if (data && data.success) {
+                        lastCapturedThumbData = data;
+                        if (thumbPreviewImg) {
+                            thumbPreviewImg.src = data.dataUri;
+                        }
+                        if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
+                        logToConsole(`[Success] Thumbnail frame extracted at ${data.timestamp}! Ready to download.`, 'success');
+                    } else {
+                        logToConsole(`[Thumbnail Error] ${data?.error || 'Failed to fetch thumbnail'}`, 'error');
+                    }
+                } catch (err) {
+                    logToConsole(`[Thumbnail Error] ${err.message}`, 'error');
+                }
+                resetExecutionState();
+                return;
             }
 
             if (activeTabId === 'tab-yt-tags') {
@@ -2707,6 +2919,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.downloadThumbnailImage = async function() {
+        if (lastCapturedThumbData) {
+            return downloadCapturedThumbnail();
+        }
         const img = document.getElementById('thumb-preview-img');
         if (!img || !img.src) return;
         const titleVal = document.getElementById('thumb-title')?.value.trim() || 'thumbnail';
@@ -2726,6 +2941,24 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             window.open(img.src, '_blank');
         }
+    };
+
+    window.sendThumbToClipper = function() {
+        const timeVal = document.getElementById('thumb-timestamp')?.value.trim() || (lastCapturedThumbData ? lastCapturedThumbData.timestamp : '');
+        const urlVal = document.getElementById('thumb-url')?.value.trim();
+        if (urlVal) {
+            const secUrl = document.getElementById('section-url');
+            if (secUrl) secUrl.value = urlVal;
+        }
+        if (timeVal) {
+            const secStart = document.getElementById('section-start');
+            if (secStart) {
+                secStart.value = timeVal;
+                secStart.dispatchEvent(new Event('input'));
+            }
+        }
+        activateTab('tab-section-clipper');
+        logToConsole(`[Clipper Synced] Loaded URL and timestamp ${timeVal || '00:00:00'} into Section Clipper`, 'success');
     };
 
     window.updateRobocopyMode = function(mode) {
