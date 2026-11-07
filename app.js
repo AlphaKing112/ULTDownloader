@@ -860,6 +860,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const thumb = v.thumbnail
                 ? `<img src="${escapeAttr(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`
                 : '';
+            const featuredBadge = (channelType === 'clips' && v.isFeatured)
+                ? `<span class="channel-clip-featured-badge" title="Featured Clip"><i class="fa-solid fa-star"></i> Featured</span>`
+                : '';
 
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -867,7 +870,11 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.dataset.index = globalIndex;
             btn.title = v.title || '';
             btn.innerHTML = `
-                <span class="channel-video-thumb">${thumb}<span class="channel-video-duration">${formatSecondsToHHMMSS(v.duration)}</span></span>
+                <span class="channel-video-thumb">
+                    ${thumb}
+                    ${featuredBadge}
+                    <span class="channel-video-duration">${formatSecondsToHHMMSS(v.duration)}</span>
+                </span>
                 <span class="channel-video-info">
                     <span class="channel-video-title">${escapeHtml(v.title || 'Untitled')}</span>
                     <span class="channel-video-meta">${escapeHtml(meta)}</span>
@@ -892,8 +899,16 @@ document.addEventListener('DOMContentLoaded', () => {
             channelMediaVaultPanel.classList.remove('hidden');
             if (channelVaultTitle) {
                 const platformLabel = channelPlatform === 'kick' ? 'Kick' : 'Twitch';
-                const typeLabel = channelType === 'vods' ? 'VODs' : (channelType === 'highlights' ? 'Highlights' : 'Clips');
-                const rangeLabel = (channelType === 'clips' && channelRange !== 'all') ? ` - ${channelRange}` : '';
+                let rangeLabel = '';
+                if (channelType === 'clips') {
+                    if (channelRange === 'featured') rangeLabel = ' - ⭐ Featured';
+                    else if (channelRange === '24h') rangeLabel = ' - 24 Hours';
+                    else if (channelRange === '7d') rangeLabel = ' - Week (7 Days)';
+                    else if (channelRange === '30d') rangeLabel = ' - 30 Days';
+                }
+                const typeLabel = (channelType === 'clips' && channelRange === 'featured')
+                    ? 'Featured Clips'
+                    : (channelType === 'vods' ? 'VODs' : (channelType === 'highlights' ? 'Highlights' : 'Clips'));
                 channelVaultTitle.textContent = `${username}'s ${typeLabel} (${platformLabel}${rangeLabel})`;
             }
             if (vaultCountBadge) {
@@ -983,7 +998,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const seq = ++channelRequestSeq;
         const platformLabel = channelPlatform === 'kick' ? 'Kick' : 'Twitch';
-        const rangeText = (channelType === 'clips' && channelRange !== 'all') ? ` (${channelRange})` : '';
+        let rangeText = '';
+        if (channelType === 'clips') {
+            if (channelRange === 'featured') rangeText = ' (Featured)';
+            else if (channelRange === '24h') rangeText = ' (24 Hours)';
+            else if (channelRange === '7d') rangeText = ' (Week)';
+            else if (channelRange === '30d') rangeText = ' (30 Days)';
+        }
         setChannelStatus(`⚡ Loading ${username}'s ${channelType}${rangeText} from ${platformLabel}...`, 'loading');
         if (channelSearchBtn) channelSearchBtn.classList.add('fetching');
 

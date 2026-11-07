@@ -1729,10 +1729,52 @@ input[type="number"] {
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .channel-range-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .channel-range-btn.active { background: var(--accent-purple); color: #fff; }
+
+.channel-range-btn.featured-btn {
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.channel-range-btn.featured-btn:hover {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(245, 158, 11, 0.5);
+}
+
+.channel-range-btn.featured-btn.active {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+    border-color: #f59e0b;
+    box-shadow: 0 2px 10px rgba(245, 158, 11, 0.35);
+}
+
+.channel-clip-featured-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    pointer-events: none;
+}
 
 /* ===== Streamer Media Vault Panel (Positioned below CLI Output & Live Stream) ===== */
 .channel-media-vault-panel {

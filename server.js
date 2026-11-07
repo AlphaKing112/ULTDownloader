@@ -110,14 +110,27 @@ function fetchKickJson(apiUrl) {
 async function fetchKickChannelVideos(username, type, range = 'all', cursor = null) {
     const slug = username.toLowerCase().replace(/_/g, '-');
     if (type === 'clips' || type === 'highlights') {
-        const kickTime = (range === '24h' || range === '24hr') ? '24h' : (range === '30d' ? '30d' : (range === '7d' ? '7d' : 'all'));
+        let kickTime = 'all';
+        if (range === '24h' || range === '24hr') kickTime = 'day';
+        else if (range === '7d' || range === 'week') kickTime = 'week';
+        else if (range === '30d' || range === 'month') kickTime = 'month';
+        else if (range === 'all' || range === 'featured') kickTime = 'all';
+
         let apiUrl = `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/clips?sort=view&time=${kickTime}`;
         if (cursor) {
             apiUrl += `&cursor=${encodeURIComponent(cursor)}`;
         }
         const data = await fetchKickJson(apiUrl);
-        const clips = Array.isArray(data?.clips) ? data.clips : [];
-        const videos = clips.map(c => ({
+        const rawClips = Array.isArray(data?.clips) ? data.clips : [];
+        let clips = rawClips;
+
+        // If 'featured' filter requested on Kick, prioritize top-viewed/liked clips
+        if (range === 'featured') {
+            clips = rawClips.filter(c => (c.views ?? c.view_count ?? 0) >= 100 || c.likes > 10);
+            if (!clips.length) clips = rawClips.slice(0, 15);
+        }
+
+        const videos = clips.map((c, idx) => ({
             id: c.id,
             title: c.title || c.id,
             url: `https://kick.com/${c.channel?.slug || slug}/clips/${c.id}`,
@@ -125,7 +138,8 @@ async function fetchKickChannelVideos(username, type, range = 'all', cursor = nu
             clip_url: c.clip_url || c.video_url || '',
             duration: Number(c.duration) || 0,
             views: c.views ?? c.view_count ?? null,
-            date: c.created_at || null
+            date: c.created_at || null,
+            isFeatured: range === 'featured' || (c.views ?? c.view_count ?? 0) >= 500 || idx < 3
         }));
         return {
             videos,
@@ -254,17 +268,18 @@ async function fetchTwitchChannelVideos(username, type, range = 'all', page = 1)
 
         async function executeGql() {
             if (type === 'clips') {
-                let filter = 'ALL_TIME';
-                if (range === '24h' || range === '24hr') filter = 'LAST_DAY';
-                else if (range === '7d') filter = 'LAST_WEEK';
-                else if (range === '30d') filter = 'LAST_MONTH';
+                let criteriaObj = '{ filter: ALL_TIME }';
+                if (range === '24h' || range === '24hr') criteriaObj = '{ filter: LAST_DAY }';
+                else if (range === '7d' || range === 'week') criteriaObj = '{ filter: LAST_WEEK }';
+                else if (range === '30d' || range === 'month') criteriaObj = '{ filter: LAST_MONTH }';
+                else if (range === 'featured') criteriaObj = '{ filter: ALL_TIME, isFeatured: true }';
 
                 const query = `query {
                   user(login: "${cleanUser}") {
                     id login displayName
-                    clips(first: 60, criteria: { filter: ${filter} }) {
+                    clips(first: 60, criteria: ${criteriaObj}) {
                       edges {
-                        node { id slug title durationSeconds viewCount createdAt thumbnailURL url }
+                        node { id slug title durationSeconds viewCount createdAt thumbnailURL url isFeatured }
                       }
                       pageInfo { hasNextPage }
                     }
@@ -277,7 +292,27 @@ async function fetchTwitchChannelVideos(username, type, range = 'all', page = 1)
                 const user = data.data?.user;
                 if (!user) throw new Error(`Streamer "${username}" was not found on Twitch`);
 
-                const edges = user.clips?.edges || [];
+                let edges = user.clips?.edges || [];
+
+                // If user selected 'featured' and 0 clips returned from isFeatured: true filter,
+                // fallback to ALL_TIME and filter/sort by isFeatured or top views so user always gets content
+                if (range === 'featured' && edges.length === 0) {
+                    try {
+                        const fallbackData = await runGqlQuery(`query {
+                          user(login: "${cleanUser}") {
+                            clips(first: 60, criteria: { filter: ALL_TIME }) {
+                              edges {
+                                node { id slug title durationSeconds viewCount createdAt thumbnailURL url isFeatured }
+                              }
+                            }
+                          }
+                        }`);
+                        const allEdges = fallbackData?.data?.user?.clips?.edges || [];
+                        const featEdges = allEdges.filter(e => e.node?.isFeatured);
+                        edges = featEdges.length > 0 ? featEdges : allEdges.slice(0, 15);
+                    } catch (fbErr) {}
+                }
+
                 const videos = edges.map(e => ({
                     id: e.node.slug || e.node.id,
                     title: e.node.title || 'Untitled Clip',
@@ -285,7 +320,8 @@ async function fetchTwitchChannelVideos(username, type, range = 'all', page = 1)
                     thumbnail: e.node.thumbnailURL || '',
                     duration: Number(e.node.durationSeconds) || 0,
                     views: e.node.viewCount ?? null,
-                    date: e.node.createdAt || null
+                    date: e.node.createdAt || null,
+                    isFeatured: !!e.node.isFeatured
                 }));
                 return { videos, page: pageNum, hasMore: !!user.clips?.pageInfo?.hasNextPage };
             }
