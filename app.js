@@ -178,6 +178,77 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Live Section Clip Duration Calculator ---
+    const sectionStartInput = document.getElementById('section-start');
+    const sectionEndInput = document.getElementById('section-end');
+    const sectionTotalDurationBadge = document.getElementById('section-total-duration');
+    const sectionDurationText = document.getElementById('section-duration-text');
+    const sectionRangePreview = document.getElementById('section-range-preview');
+    const sectionDurationCard = document.getElementById('section-duration-card');
+
+    function parseTimestampToSeconds(str) {
+        if (!str) return 0;
+        const clean = str.trim().replace(/^[^0-9:]/, '');
+        const parts = clean.split(':').map(Number);
+        if (parts.length === 3) return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
+        if (parts.length === 2) return (parts[0] || 0) * 60 + (parts[1] || 0);
+        return parseFloat(clean) || 0;
+    }
+
+    function formatDurationHuman(totalSec) {
+        if (totalSec <= 0) return '0s';
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = Math.floor(totalSec % 60);
+        const parts = [];
+        if (h > 0) parts.push(`${h}h`);
+        if (m > 0 || h > 0) parts.push(`${m}m`);
+        parts.push(`${s}s`);
+        return parts.join(' ');
+    }
+
+    function updateSectionDurationDisplay() {
+        if (!sectionStartInput || !sectionEndInput) return;
+
+        const startSec = parseTimestampToSeconds(sectionStartInput.value);
+        const endSec = parseTimestampToSeconds(sectionEndInput.value);
+        const durationSec = endSec - startSec;
+
+        if (endSec > startSec) {
+            const hhmmss = formatSecondsToHHMMSS(durationSec);
+            const human = formatDurationHuman(durationSec);
+            const label = `${hhmmss} (${human})`;
+            if (sectionTotalDurationBadge) {
+                sectionTotalDurationBadge.innerHTML = `<i class="fa-solid fa-stopwatch"></i> Total: ${label}`;
+                sectionTotalDurationBadge.className = 'badge-duration valid';
+            }
+            if (sectionDurationText) sectionDurationText.textContent = label;
+            if (sectionRangePreview) sectionRangePreview.textContent = `${sectionStartInput.value.trim()} → ${sectionEndInput.value.trim()}`;
+            if (sectionDurationCard) sectionDurationCard.classList.remove('invalid');
+        } else {
+            if (sectionTotalDurationBadge) {
+                sectionTotalDurationBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> End must be > Start';
+                sectionTotalDurationBadge.className = 'badge-duration invalid';
+            }
+            if (sectionDurationText) sectionDurationText.textContent = 'Invalid time range';
+            if (sectionRangePreview) sectionRangePreview.textContent = 'End time must be after start time';
+            if (sectionDurationCard) sectionDurationCard.classList.add('invalid');
+        }
+    }
+
+    if (sectionStartInput) {
+        sectionStartInput.addEventListener('input', () => {
+            updateSectionDurationDisplay();
+            updateGeneratedCommand();
+        });
+    }
+    if (sectionEndInput) {
+        sectionEndInput.addEventListener('input', () => {
+            updateSectionDurationDisplay();
+            updateGeneratedCommand();
+        });
+    }
+
     // --- Range Builder for Multi-Section ---
     const newRangeInput = document.getElementById('new-range-input');
     const btnAddRange = document.getElementById('btn-add-range');
@@ -779,6 +850,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         sectionUrlInput.value = video.url;
         sectionUrlInput.dispatchEvent(new Event('input')); // platform detect + title + player embed
+        updateSectionDurationDisplay();
         updateGeneratedCommand();
 
         const kind = channelType === 'vods' ? 'VOD' : (channelType === 'highlights' ? 'Highlight' : 'Clip');
@@ -2268,5 +2340,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     checkBackendHealth();
+    updateSectionDurationDisplay();
     updateGeneratedCommand();
 });

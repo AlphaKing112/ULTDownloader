@@ -587,6 +587,86 @@ input[type="number"] {
     align-items: center;
 }
 
+/* Section Timestamp Duration Indicators */
+.badge-duration {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.2s ease;
+}
+
+.badge-duration.valid {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.badge-duration.invalid {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.section-duration-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(6, 182, 212, 0.08) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    margin-top: 10px;
+    margin-bottom: 2px;
+    font-size: 12.5px;
+    transition: all 0.2s ease;
+}
+
+.section-duration-card.invalid {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.section-duration-card .duration-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+}
+
+.section-duration-card .duration-icon {
+    color: var(--accent-cyan);
+    font-size: 13px;
+}
+
+.section-duration-card.invalid .duration-icon {
+    color: #ef4444;
+}
+
+.section-duration-card .duration-value {
+    color: var(--accent-purple-light);
+    font-weight: 700;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.section-duration-card.invalid .duration-value {
+    color: #ef4444;
+}
+
+.section-duration-card .duration-range-preview {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-main);
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
 .badge-db {
     background: var(--accent-gradient);
     color: #fff;
