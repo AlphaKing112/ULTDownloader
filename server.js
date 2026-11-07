@@ -1077,7 +1077,16 @@ const server = http.createServer((req, res) => {
                         cleanLines.push(trimmed);
                     });
 
-                    const transcriptText = cleanLines.length > 0 ? cleanLines.join('\n') : 'No automatic transcript subtitles found for this video.';
+                    let transcriptText = cleanLines.length > 0 ? cleanLines.join('\n') : '';
+                    if (!transcriptText) {
+                        if (url.toLowerCase().includes('twitch.tv')) {
+                            transcriptText = 'Twitch does not generate automated speech-to-text transcripts for streams or VODs (unless the broadcaster explicitly enabled closed captions during the live broadcast). Automatic full transcripts are currently provided natively on YouTube.';
+                        } else if (url.toLowerCase().includes('kick.com')) {
+                            transcriptText = 'Kick does not generate automated subtitles or transcripts for VODs. Automatic full transcripts are currently provided natively on YouTube.';
+                        } else {
+                            transcriptText = 'No automatic transcript subtitles found for this video.';
+                        }
+                    }
                     console.log(`[Server Transcript Extracted]: ${cleanLines.length} subtitle lines`);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: true, transcript: transcriptText }));

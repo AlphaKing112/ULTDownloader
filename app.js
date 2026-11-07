@@ -2040,7 +2040,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (textBox) textBox.textContent = data.transcript;
                             if (resultsCard) resultsCard.classList.remove('hidden');
 
-                            logToConsole('[Success] Extracted AI transcript key moments directly on-screen!', 'success');
+                            if (data.transcript.includes('Twitch') || data.transcript.includes('Kick') || data.transcript.includes('No automatic transcript')) {
+                                logToConsole(`[Notice] ${data.transcript}`, 'info');
+                            } else {
+                                logToConsole('[Success] Extracted full transcript directly on-screen!', 'success');
+                            }
                         } else {
                             logToConsole('[Error] Could not extract transcript subtitles for this video.', 'error');
                         }
