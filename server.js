@@ -1808,46 +1808,6 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         return;
     }
 
-    // API Debug Frame Extract Endpoint
-    if (pathname === '/api/debug-extract' && req.method === 'GET') {
-        const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-        const tests = {};
-        try {
-            tests.ytdlpVersion = execSync(`${ytdlpBin} --version`, { encoding: 'utf8', timeout: 5000 }).trim();
-        } catch (e) { tests.ytdlpVersion = e.message; }
-
-        try {
-            tests.ffmpegVersion = execSync('ffmpeg -version', { encoding: 'utf8', timeout: 5000 }).split('\n')[0];
-        } catch (e) { tests.ffmpegVersion = e.message; }
-
-        // Test clients: android, tv, ios, mweb
-        const clientsToTest = ['android', 'tv', 'ios', 'mweb'];
-        tests.clients = {};
-        for (const cl of clientsToTest) {
-            try {
-                const out = execSync(`${ytdlpBin} -g -f "best[height<=720]/18/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=${cl}" "https://www.youtube.com/watch?v=rz1B4B2yBZY"`, { encoding: 'utf8', timeout: 12000, stdio: ['pipe', 'pipe', 'pipe'] });
-                tests.clients[cl] = { success: true, url: out.trim().split(/[\r\n]+/)[0].slice(0, 50) + '...' };
-            } catch (e) {
-                const errMsg = (e.stderr ? e.stderr.toString() : e.message).trim().split(/[\r\n]+/)[0];
-                tests.clients[cl] = { success: false, error: errMsg };
-            }
-        }
-
-        try {
-            const cmd = `${ytdlpBin} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=rz1B4B2yBZY"`;
-            const out = execSync(cmd, { maxBuffer: 15 * 1024 * 1024, encoding: 'utf8', timeout: 20000, stdio: ['pipe', 'pipe', 'pipe'] });
-            const data = JSON.parse(out);
-            const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
-            tests.storyboardCount = storyboards.length;
-            tests.storyboardBest = storyboards[0] ? { width: storyboards[0].width, height: storyboards[0].height, url: storyboards[0].url } : null;
-        } catch (e) {
-            tests.storyboardErr = (e.stderr ? e.stderr.toString() : e.message);
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify(tests, null, 2));
-    }
-
     // API Cookies Status Endpoint
     if (pathname === '/api/cookies-status' && req.method === 'GET') {
         const cookiesPath = path.join(__dirname, 'cookies.txt');
