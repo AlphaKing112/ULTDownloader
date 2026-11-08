@@ -1178,6 +1178,29 @@ input[type="number"] {
     flex-wrap: wrap;
 }
 
+.captured-thumb-quality-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(145, 70, 255, 0.12);
+    border: 1px solid rgba(167, 139, 250, 0.35);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+
+.captured-thumb-quality-banner i {
+    color: #a78bfa;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.captured-thumb-quality-banner strong {
+    color: #ffffff;
+}
+
 .btn-sync-player {
     background: rgba(145, 70, 255, 0.15);
     border: 1px solid rgba(145, 70, 255, 0.35);
