@@ -1274,15 +1274,23 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}${sheetExt}`);
         fs.writeFileSync(tempSheet, sheetData.buf);
 
-        // Crop exact frame and upscale with Lanczos interpolation + unsharp edge filter to crisp 1280x720 HD
-        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
-        execSync(cmd, { stdio: 'pipe' });
-
-        if (!fs.existsSync(outFilePath)) {
-            throw new Error('ffmpeg failed to generate output frame file');
+        // Crop exact frame and upscale directly to memory buffer via FFmpeg pipe:1
+        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1280:720" -vframes 1 -f image2 -c:v mjpeg pipe:1`;
+        let jpegBuf;
+        try {
+            jpegBuf = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, windowsHide: true });
+        } catch (pipeErr) {
+            console.error(`[FFmpeg Crop Error]: ${pipeErr.message}`);
+            throw new Error(`FFmpeg crop failed: ${pipeErr.message}`);
         }
 
-        const base64Data = fs.readFileSync(outFilePath).toString('base64');
+        if (!jpegBuf || jpegBuf.length < 500) {
+            throw new Error('FFmpeg generated invalid or empty image buffer');
+        }
+
+        try { fs.writeFileSync(outFilePath, jpegBuf); } catch (e) {}
+
+        const base64Data = jpegBuf.toString('base64');
         return {
             filename: outFilename,
             base64Url: `data:image/jpeg;base64,${base64Data}`,
