@@ -1025,13 +1025,13 @@ function fetchWithRedirects(targetUrl, headers = {}, maxRedirects = 5) {
 
 const ytStoryboardCache = new Map();
 
-function getYouTubeStoryboard(videoId) {
+async function getYouTubeStoryboard(videoId) {
     if (ytStoryboardCache.has(videoId)) {
         return ytStoryboardCache.get(videoId);
     }
 
     let ytdlpErr = '';
-    // 1. Try yt-dlp ios,android,web_embedded client (extracts full storyboard specs without bot challenges)
+    // 1. Try yt-dlp ios,android,web_embedded client
     try {
         const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
         const cookiesFlag = getCookiesFlag('https://www.youtube.com');
@@ -1057,54 +1057,74 @@ function getYouTubeStoryboard(videoId) {
         }
     } catch (e) {
         ytdlpErr = (e.stderr ? e.stderr.toString() : e.message).slice(0, 300);
-        console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying fallback...`);
+        console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying native https fallback...`);
     }
 
-    // 2. Fallback: Parse watch page HTML
-    let html = '';
-    let curlErr = '';
-    try {
-        const curlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
-        html = execSync(curlCmd, { maxBuffer: 15 * 1024 * 1024, encoding: 'utf8' });
-    } catch (err) {
-        curlErr = err.message;
-        console.error(`[Storyboard Curl Error]: ${curlErr}`);
-    }
+    // 2. Fallback: Parse watch page HTML via native https (with Chrome UA & Google Consent cookies)
+    const urlsToTry = [
+        `https://www.youtube.com/watch?v=${videoId}`,
+        `https://www.youtube.com/embed/${videoId}`
+    ];
 
-    const specMatch = html.match(/"spec":\s*"([^"]+)"/);
-    if (!specMatch) {
-        throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, curl: ${curlErr || 'no spec match'})`);
-    }
+    let lastHtmlErr = '';
+    for (const pageUrl of urlsToTry) {
+        try {
+            const html = await new Promise((resolve, reject) => {
+                const req = https.get(pageUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Cookie': 'CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg;'
+                    },
+                    timeout: 8000
+                }, res => {
+                    let b = '';
+                    res.on('data', c => b += c);
+                    res.on('end', () => resolve(b));
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            });
 
-    const rawSpec = specMatch[1];
-    const parts = rawSpec.split('|');
-    const baseUrl = parts[0];
+            const specMatch = html.match(/"spec":\s*"([^"]+)"/);
+            if (specMatch && specMatch[1]) {
+                const rawSpec = specMatch[1];
+                const parts = rawSpec.split('|');
+                const baseUrl = parts[0];
 
-    let bestLevel = null;
-    let bestWidth = 0;
+                let bestLevel = null;
+                let bestWidth = 0;
 
-    for (let i = 1; i < parts.length; i++) {
-        const segs = parts[i].split('#');
-        if (segs.length < 8) continue;
-        const width = parseInt(segs[0], 10);
-        const height = parseInt(segs[1], 10);
-        const count = parseInt(segs[2], 10);
-        const cols = parseInt(segs[3], 10);
-        const rows = parseInt(segs[4], 10);
-        const interval = parseInt(segs[5], 10);
-        const template = segs[6];
-        const sigh = segs[7];
+                for (let i = 1; i < parts.length; i++) {
+                    const segs = parts[i].split('#');
+                    if (segs.length < 8) continue;
+                    const width = parseInt(segs[0], 10);
+                    const height = parseInt(segs[1], 10);
+                    const count = parseInt(segs[2], 10);
+                    const cols = parseInt(segs[3], 10);
+                    const rows = parseInt(segs[4], 10);
+                    const interval = parseInt(segs[5], 10);
+                    const template = segs[6];
+                    const sigh = segs[7];
 
-        if (width > bestWidth) {
-            bestWidth = width;
-            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
+                    if (width > bestWidth) {
+                        bestWidth = width;
+                        bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
+                    }
+                }
+
+                if (bestLevel) {
+                    const sbInfo = { type: 'spec', ...bestLevel };
+                    ytStoryboardCache.set(videoId, sbInfo);
+                    return sbInfo;
+                }
+            }
+        } catch (err) {
+            lastHtmlErr = err.message;
         }
     }
 
-    if (!bestLevel) throw new Error('Could not parse storyboard spec levels');
-    const sbInfo = { type: 'spec', ...bestLevel };
-    ytStoryboardCache.set(videoId, sbInfo);
-    return sbInfo;
+    throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, native: ${lastHtmlErr || 'no spec match'})`);
 }
 
 async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
@@ -1173,7 +1193,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
     }
 
     // METHOD 2: Storyboard sheet extraction fallback
-    const sb = getYouTubeStoryboard(videoId);
+    const sb = await getYouTubeStoryboard(videoId);
 
     let sheetUrl = '';
     let cropX = 0;
@@ -1220,17 +1240,15 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         cropX = col * cellW;
         cropY = row * cellH;
 
-        const sheetName = sb.template === 'default' ? 'default' : `M${sheetIndex}`;
+        const sheetName = (sb.template || 'default').replace('$M', sheetIndex);
         sheetUrl = sb.baseUrl.replace('$L', sb.levelIndex).replace('$N', sheetName);
         if (sheetUrl.includes('$M')) sheetUrl = sheetUrl.replace('$M', sheetIndex);
         if (sb.sigh) sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${sb.sigh}`;
     }
 
-    const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.jpg`);
-
     try {
-        // Download storyboard sheet via native https (prevents shell $ variable expansion corruption in sigh signature)
-        const sheetBuf = await new Promise((resolve, reject) => {
+        // Download storyboard sheet via native https (supports both WebP and JPEG)
+        const sheetData = await new Promise((resolve, reject) => {
             const req = https.get(sheetUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -1247,18 +1265,21 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                     if (buf.length < 500) {
                         return reject(new Error('Storyboard sheet download too small'));
                     }
-                    // Validate JPEG header: 0xFF 0xD8
-                    if (buf[0] !== 0xFF || buf[1] !== 0xD8) {
-                        return reject(new Error(`Storyboard file is not a valid JPEG (received ${buf.slice(0, 30).toString()})`));
+                    const isWebp = buf.length > 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP';
+                    const isJpeg = buf.length > 2 && buf[0] === 0xFF && buf[1] === 0xD8;
+                    if (!isWebp && !isJpeg) {
+                        return reject(new Error(`Storyboard file is not a valid image format (received ${buf.slice(0, 16).toString()})`));
                     }
-                    resolve(buf);
+                    resolve({ buf, isWebp });
                 });
             });
             req.on('error', reject);
             req.setTimeout(12000, () => { req.destroy(); reject(new Error('Storyboard download timeout')); });
         });
 
-        fs.writeFileSync(tempSheet, sheetBuf);
+        const sheetExt = sheetData.isWebp ? '.webp' : '.jpg';
+        const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}${sheetExt}`);
+        fs.writeFileSync(tempSheet, sheetData.buf);
 
         // Crop exact frame and upscale with Lanczos interpolation + unsharp edge filter to crisp 1280x720 HD
         const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
@@ -1276,7 +1297,14 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
             height: 720
         };
     } finally {
-        try { if (fs.existsSync(tempSheet)) fs.unlinkSync(tempSheet); } catch (e) {}
+        try {
+            const files = fs.readdirSync(downloadsDir);
+            for (const f of files) {
+                if (f.startsWith(`temp_sb_${videoId}_`)) {
+                    try { fs.unlinkSync(path.join(downloadsDir, f)); } catch (e) {}
+                }
+            }
+        } catch (e) {}
     }
 }
 

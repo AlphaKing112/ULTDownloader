@@ -1784,10 +1784,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- High-Resolution Frame Thumbnail Capture from Player ---
     let lastCapturedThumbData = null;
 
-    window.captureThumbnailFromPlayer = async function() {
-        const currentSec = getPlayerCurrentTime();
-        const timeStr = formatSecondsToHHMMSS(currentSec);
-        const isDefaultZero = currentSec <= 0 || timeStr === '00:00:00';
+    window.captureThumbnailFromPlayer = async function(requestedTime = null) {
+        let timeStr = requestedTime;
+        if (!timeStr) {
+            const inputVal = document.getElementById('thumb-timestamp')?.value.trim();
+            const playerSec = getPlayerCurrentTime();
+            if (inputVal && inputVal !== '00:00:00' && inputVal !== '0') {
+                timeStr = inputVal;
+            } else if (playerSec > 0) {
+                timeStr = formatSecondsToHHMMSS(playerSec);
+            } else {
+                timeStr = '00:00:00';
+            }
+        }
+        const isDefaultZero = !timeStr || timeStr === '00:00:00' || timeStr === '0';
 
         // Find active video URL
         let activeUrl = lastActiveUrl;
@@ -2401,7 +2411,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (activeTabId === 'tab-yt-thumbnail') {
                 const url = document.getElementById('thumb-url').value.trim();
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
-                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
+                let timeVal = document.getElementById('thumb-timestamp')?.value.trim();
+                const playerSec = getPlayerCurrentTime();
+                if ((!timeVal || timeVal === '00:00:00' || timeVal === '0') && playerSec > 0) {
+                    timeVal = formatSecondsToHHMMSS(playerSec);
+                    const thumbTimeInput = document.getElementById('thumb-timestamp');
+                    if (thumbTimeInput) thumbTimeInput.value = timeVal;
+                }
 
                 if (!url) {
                     logToConsole('[Error] Please enter a valid YouTube, Twitch, or Kick URL.', 'error');
@@ -2424,6 +2440,20 @@ document.addEventListener('DOMContentLoaded', () => {
                             thumbPreviewImg.src = data.thumbnailUrl;
                         }
                         if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
+
+                        // Also update player bottom captured card if visible
+                        const capturedImg = document.getElementById('captured-thumb-img');
+                        const capturedCard = document.getElementById('captured-thumbnail-card');
+                        const capturedLabel = document.getElementById('captured-thumb-time-label');
+                        const capturedOverlay = document.getElementById('captured-thumb-timestamp-overlay');
+                        if (capturedImg) {
+                            capturedImg.onerror = null;
+                            capturedImg.src = data.thumbnailUrl;
+                        }
+                        if (capturedLabel) capturedLabel.textContent = data.isFrame ? `Frame at ${data.timestamp || timeVal}` : 'Default Cover (1080p HD)';
+                        if (capturedOverlay) capturedOverlay.textContent = data.isFrame ? (data.timestamp || timeVal) : '1080p HD';
+                        if (capturedCard) capturedCard.classList.remove('hidden');
+
                         logToConsole(`[Success] ${data.isFrame ? `Extracted exact frame at ${data.timestamp || timeVal}!` : 'High-resolution thumbnail loaded!'} Ready to download.`, 'success');
                     } else {
                         logToConsole(`[Thumbnail Error] ${data?.error || 'Failed to fetch thumbnail'}`, 'error');
@@ -3019,12 +3049,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.downloadThumbnailImage = async function() {
-        // 1. If we already have a captured frame in memory, download it directly!
-        if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl && lastCapturedThumbData.isFrame) {
-            return downloadCapturedThumbnail();
-        }
-
-        // 2. Check if a timestamp is specified in the input OR if the active video player is scrubbed to a timestamp
+        // 1. Determine the target timestamp
         let timeVal = document.getElementById('thumb-timestamp')?.value.trim();
         const playerSec = getPlayerCurrentTime();
         if ((!timeVal || timeVal === '00:00:00' || timeVal === '0') && playerSec > 0) {
@@ -3035,14 +3060,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const isDefaultZero = !timeVal || timeVal === '0' || timeVal === '00:00:00' || timeVal === '0:00' || timeVal === '00:00';
 
-        // 3. If genuinely at 00:00:00 (default), download the official 1080p cover
+        // 2. If genuinely at 00:00:00 (default), download the official 1080p cover
         if (isDefaultZero) {
             return downloadDefaultCoverThumbnail();
         }
 
+        // 3. If we ALREADY have a captured frame in memory for this EXACT requested timestamp, download it directly!
+        if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl && lastCapturedThumbData.isFrame && lastCapturedThumbData.timestamp === timeVal) {
+            return downloadCapturedThumbnail();
+        }
+
         // 4. Otherwise, trigger frame capture at this timestamp right now and then download it!
         logToConsole(`[Thumbnail] Capturing exact frame at ${timeVal}...`, 'system');
-        await captureThumbnailFromPlayer();
+        await captureThumbnailFromPlayer(timeVal);
         if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl) {
             return downloadCapturedThumbnail();
         }
