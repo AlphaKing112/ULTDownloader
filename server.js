@@ -1060,71 +1060,64 @@ async function getYouTubeStoryboard(videoId) {
         console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying native https fallback...`);
     }
 
-    // 2. Fallback: Parse watch page HTML via native https (with Chrome UA & Google Consent cookies)
-    const urlsToTry = [
-        `https://www.youtube.com/watch?v=${videoId}`,
-        `https://www.youtube.com/embed/${videoId}`
-    ];
+    // 2. Fallback: Parse watch page HTML (curl with -sL --compressed and fallback to fetchWithRedirects)
+    let html = '';
+    let fetchErr = '';
+    try {
+        const curlCmd = `curl -sL --compressed -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
+        html = execSync(curlCmd, { maxBuffer: 20 * 1024 * 1024, encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (err) {
+        fetchErr = err.message;
+    }
 
-    let lastHtmlErr = '';
-    for (const pageUrl of urlsToTry) {
+    if (!html || (!html.includes('"spec"') && !html.includes('\\"spec\\"'))) {
         try {
-            const html = await new Promise((resolve, reject) => {
-                const req = https.get(pageUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Cookie': 'CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg;'
-                    },
-                    timeout: 8000
-                }, res => {
-                    let b = '';
-                    res.on('data', c => b += c);
-                    res.on('end', () => resolve(b));
-                });
-                req.on('error', reject);
-                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-            });
-
-            const specMatch = html.match(/"spec":\s*"([^"]+)"/);
-            if (specMatch && specMatch[1]) {
-                const rawSpec = specMatch[1];
-                const parts = rawSpec.split('|');
-                const baseUrl = parts[0];
-
-                let bestLevel = null;
-                let bestWidth = 0;
-
-                for (let i = 1; i < parts.length; i++) {
-                    const segs = parts[i].split('#');
-                    if (segs.length < 8) continue;
-                    const width = parseInt(segs[0], 10);
-                    const height = parseInt(segs[1], 10);
-                    const count = parseInt(segs[2], 10);
-                    const cols = parseInt(segs[3], 10);
-                    const rows = parseInt(segs[4], 10);
-                    const interval = parseInt(segs[5], 10);
-                    const template = segs[6];
-                    const sigh = segs[7];
-
-                    if (width > bestWidth) {
-                        bestWidth = width;
-                        bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
-                    }
-                }
-
-                if (bestLevel) {
-                    const sbInfo = { type: 'spec', ...bestLevel };
-                    ytStoryboardCache.set(videoId, sbInfo);
-                    return sbInfo;
-                }
-            }
-        } catch (err) {
-            lastHtmlErr = err.message;
+            const resp = await fetchWithRedirects(`https://www.youtube.com/watch?v=${videoId}`);
+            if (resp && resp.body) html = resp.body;
+        } catch (e) {
+            fetchErr += (fetchErr ? ' | ' : '') + e.message;
         }
     }
 
-    throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, native: ${lastHtmlErr || 'no spec match'})`);
+    let specMatch = html.match(/"spec":\s*"([^"]+)"/);
+    if (!specMatch) {
+        const unescaped = html.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        specMatch = unescaped.match(/"spec":\s*"([^"]+)"/);
+    }
+
+    if (!specMatch || !specMatch[1]) {
+        throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, fetch: ${fetchErr || 'no spec match'})`);
+    }
+
+    const rawSpec = specMatch[1];
+    const parts = rawSpec.split('|');
+    const baseUrl = parts[0];
+
+    let bestLevel = null;
+    let bestWidth = 0;
+
+    for (let i = 1; i < parts.length; i++) {
+        const segs = parts[i].split('#');
+        if (segs.length < 8) continue;
+        const width = parseInt(segs[0], 10);
+        const height = parseInt(segs[1], 10);
+        const count = parseInt(segs[2], 10);
+        const cols = parseInt(segs[3], 10);
+        const rows = parseInt(segs[4], 10);
+        const interval = parseInt(segs[5], 10);
+        const template = segs[6];
+        const sigh = segs[7];
+
+        if (width > bestWidth) {
+            bestWidth = width;
+            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
+        }
+    }
+
+    if (!bestLevel) throw new Error('Could not parse storyboard spec levels');
+    const sbInfo = { type: 'spec', ...bestLevel };
+    ytStoryboardCache.set(videoId, sbInfo);
+    return sbInfo;
 }
 
 async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
