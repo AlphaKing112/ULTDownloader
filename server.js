@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { exec, execFile, spawn } = require('child_process');
+const { exec, execFile, spawn, execSync } = require('child_process');
 const crypto = require('crypto');
 const urlModule = require('url');
 
@@ -986,7 +986,131 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Fast Thumbnail Fetching Endpoint (YouTube direct, Twitch GQL, Kick API - No Python!)
+function parseTimestampToSeconds(ts) {
+    if (!ts) return 0;
+    if (typeof ts === 'number') return Math.max(0, ts);
+    const str = String(ts).trim();
+    if (!str) return 0;
+    const parts = str.split(':').map(Number);
+    if (parts.some(isNaN)) return 0;
+    if (parts.length === 3) {
+        return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else if (parts.length === 2) {
+        return parts[0] * 60 + parts[1];
+    } else if (parts.length === 1) {
+        return parts[0];
+    }
+    return 0;
+}
+
+async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
+    // 1. Fetch YouTube watch page HTML (0ms bot blocking, public web)
+    const html = await new Promise((resolve, reject) => {
+        https.get(`https://www.youtube.com/watch?v=${videoId}`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+        }, res => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => resolve(data));
+        }).on('error', reject);
+    });
+
+    const specMatch = html.match(/"spec":\s*"([^"]+)"/);
+    if (!specMatch) {
+        throw new Error('No storyboard spec found on YouTube page');
+    }
+
+    const rawSpec = specMatch[1];
+    const parts = rawSpec.split('|');
+    const baseUrl = parts[0];
+
+    let bestLevel = null;
+    let bestWidth = 0;
+
+    for (let i = 1; i < parts.length; i++) {
+        const segs = parts[i].split('#');
+        if (segs.length < 8) continue;
+        const width = parseInt(segs[0], 10);
+        const height = parseInt(segs[1], 10);
+        const count = parseInt(segs[2], 10);
+        const cols = parseInt(segs[3], 10);
+        const rows = parseInt(segs[4], 10);
+        const interval = parseInt(segs[5], 10);
+        const template = segs[6];
+        const sigh = segs[7];
+
+        if (width > bestWidth) {
+            bestWidth = width;
+            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1 };
+        }
+    }
+
+    if (!bestLevel) {
+        throw new Error('No valid storyboard level parsed');
+    }
+
+    const frameDurationSec = bestLevel.interval > 0 ? (bestLevel.interval / 1000) : 2.0;
+    const frameIndex = Math.min(Math.floor(targetSeconds / frameDurationSec), Math.max(0, bestLevel.count - 1));
+    const framesPerSheet = bestLevel.cols * bestLevel.rows;
+    const sheetIndex = Math.floor(frameIndex / framesPerSheet);
+    const frameInSheet = frameIndex % framesPerSheet;
+    const col = frameInSheet % bestLevel.cols;
+    const row = Math.floor(frameInSheet / bestLevel.cols);
+
+    const cropX = col * bestLevel.width;
+    const cropY = row * bestLevel.height;
+
+    const sheetName = bestLevel.template === 'default' ? 'default' : `M${sheetIndex}`;
+    let sheetUrl = baseUrl.replace('$L', bestLevel.levelIndex).replace('$N', sheetName);
+    if (sheetUrl.includes('$M')) {
+        sheetUrl = sheetUrl.replace('$M', sheetIndex);
+    }
+    if (bestLevel.sigh) {
+        sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${bestLevel.sigh}`;
+    }
+
+    const sheetBuf = await new Promise((resolve, reject) => {
+        https.get(sheetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+            }
+        }, res => {
+            if (res.statusCode !== 200) {
+                return reject(new Error(`Failed to download storyboard sheet: HTTP ${res.statusCode}`));
+            }
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+        }).on('error', reject);
+    });
+
+    const downloadsDir = path.join(__dirname, 'downloads');
+    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+    const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.webp`);
+    const outFilename = `frame_${videoId}_${targetSeconds}s.jpg`;
+    const outFilePath = path.join(downloadsDir, outFilename);
+
+    try {
+        fs.writeFileSync(tempSheet, sheetBuf);
+        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${bestLevel.width}:${bestLevel.height}:${cropX}:${cropY}" -frames:v 1 -update 1 "${outFilePath}"`;
+        execSync(cmd, { stdio: 'pipe' });
+
+        const base64Data = fs.readFileSync(outFilePath).toString('base64');
+        return {
+            filename: outFilename,
+            base64Url: `data:image/jpeg;base64,${base64Data}`,
+            width: bestLevel.width,
+            height: bestLevel.height
+        };
+    } finally {
+        try { if (fs.existsSync(tempSheet)) fs.unlinkSync(tempSheet); } catch (e) {}
+    }
+}
+
+    // API Fast Thumbnail Fetching Endpoint (YouTube direct / storyboard, Twitch GQL, Kick API - No Python!)
     if ((pathname === '/api/extract-thumbnail' || pathname === '/api/fetch-thumbnail') && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
@@ -998,12 +1122,12 @@ const server = http.createServer((req, res) => {
                     return res.end(JSON.stringify({ success: false, error: 'URL required' }));
                 }
 
-                console.log(`[Server Fetching Thumbnail]: ${url}`);
+                console.log(`[Server Fetching Thumbnail]: ${url} (timestamp: ${timestamp || 'default cover'})`);
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
                 const isTwitch = url.toLowerCase().includes('twitch.tv');
                 const isKick = url.toLowerCase().includes('kick.com');
 
-                // 1. YouTube: Instant direct public CDN image (0ms, 100% reliable, zero bot block)
+                // 1. YouTube: Instant direct public CDN image or exact timestamp storyboard extraction
                 if (isYouTube) {
                     const ytMatch = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i);
                     const ytId = ytMatch ? ytMatch[1] : '';
@@ -1012,6 +1136,45 @@ const server = http.createServer((req, res) => {
                         return res.end(JSON.stringify({ success: false, error: 'Could not parse YouTube video ID' }));
                     }
 
+                    const sec = parseTimestampToSeconds(timestamp);
+                    const cleanTitle = title ? title.replace(/[^A-Za-z0-9_-]+/g, '_') : ytId;
+
+                    // If a specific timestamp is requested (> 0 seconds), extract the exact video frame from YouTube storyboard
+                    if (sec > 0) {
+                        try {
+                            const frameData = await extractYouTubeTimestampFrame(ytId, sec);
+                            if (frameData && frameData.base64Url) {
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                return res.end(JSON.stringify({
+                                    success: true,
+                                    platform: 'youtube',
+                                    id: ytId,
+                                    isFrame: true,
+                                    thumbnailUrl: frameData.base64Url,
+                                    downloadUrl: frameData.base64Url,
+                                    timestamp: timestamp,
+                                    filename: `${cleanTitle}_frame_${String(timestamp).replace(/:/g, '-')}.jpg`
+                                }));
+                            }
+                        } catch (err) {
+                            console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to snapshot/cover.`);
+                            const snapNum = sec <= 30 ? 1 : 2;
+                            const snapUrl = `https://img.youtube.com/vi/${ytId}/${snapNum}.jpg`;
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            return res.end(JSON.stringify({
+                                success: true,
+                                platform: 'youtube',
+                                id: ytId,
+                                isFrame: true,
+                                thumbnailUrl: snapUrl,
+                                downloadUrl: snapUrl,
+                                timestamp: timestamp,
+                                filename: `${cleanTitle}_snapshot_${String(timestamp).replace(/:/g, '-')}.jpg`
+                            }));
+                        }
+                    }
+
+                    // Default official video cover thumbnail
                     const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
                     const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
 
@@ -1020,10 +1183,11 @@ const server = http.createServer((req, res) => {
                         success: true,
                         platform: 'youtube',
                         id: ytId,
+                        isFrame: false,
                         thumbnailUrl: maxRes,
                         fallbackUrl: hqRes,
                         timestamp: timestamp || '00:00:00',
-                        filename: `${title ? title.replace(/[^A-Za-z0-9_-]+/g, '_') : ytId}_thumbnail.jpg`
+                        filename: `${cleanTitle}_thumbnail.jpg`
                     }));
                 }
 
@@ -1035,7 +1199,7 @@ const server = http.createServer((req, res) => {
                     if (vodMatch && vodMatch[1]) {
                         const vodId = vodMatch[1];
                         const payload = JSON.stringify({
-                            query: `query { video(id: "${vodId}") { title, previewThumbnailURL(width: 1280, height: 720) } }`
+                            query: `query { video(id: "${vodId}") { title, lengthSeconds, previewThumbnailURL(width: 1280, height: 720) } }`
                         });
                         const reqGql = https.request('https://gql.twitch.tv/gql', {
                             method: 'POST',
@@ -1051,16 +1215,25 @@ const server = http.createServer((req, res) => {
                             gqlRes.on('end', () => {
                                 try {
                                     const parsed = JSON.parse(dataStr);
-                                    let thumbUrl = parsed?.data?.video?.previewThumbnailURL || '';
+                                    const video = parsed?.data?.video;
+                                    let thumbUrl = video?.previewThumbnailURL || '';
+                                    const sec = parseTimestampToSeconds(timestamp);
+                                    if (video && sec > 0 && thumbUrl) {
+                                        const duration = video.lengthSeconds || 1;
+                                        const ratio = Math.min(1, Math.max(0, sec / duration));
+                                        const thumbIdx = Math.min(3, Math.floor(ratio * 4));
+                                        thumbUrl = thumbUrl.replace(/thumb\d+/i, `thumb${thumbIdx}`);
+                                    }
                                     if (thumbUrl) {
                                         res.writeHead(200, { 'Content-Type': 'application/json' });
                                         return res.end(JSON.stringify({
                                             success: true,
                                             platform: 'twitch',
                                             thumbnailUrl: thumbUrl,
-                                            title: parsed?.data?.video?.title || 'twitch_vod',
+                                            isFrame: sec > 0,
+                                            title: video?.title || 'twitch_vod',
                                             timestamp: timestamp || '00:00:00',
-                                            filename: `twitch_${vodId}_thumb.jpg`
+                                            filename: `twitch_${vodId}_${timestamp ? String(timestamp).replace(/:/g, '-') : 'thumb'}.jpg`
                                         }));
                                     }
                                 } catch (e) {}

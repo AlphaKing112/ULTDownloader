@@ -1399,10 +1399,13 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'tab-yt-thumbnail': {
                 const url = document.getElementById('thumb-url').value.trim() || '<VIDEO_URL>';
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
+                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
                 const outName = titleVal ? sanitizeFilename(titleVal) : '%(title)s';
                 const ytId = extractYtId(url);
-                if (ytId) {
+                if (ytId && !timeVal) {
                     cmd = `curl -o "downloads/${outName}.jpg" "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg"`;
+                } else if (timeVal) {
+                    cmd = `ffmpeg -ss ${timeVal} -i "$(yt-dlp -g '${url}')" -frames:v 1 -y "downloads/${outName}_${timeVal.replace(/:/g, '-')}.jpg"`;
                 } else {
                     cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/${outName}" "${url}"`;
                 }
@@ -1788,20 +1791,25 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        const titleVal = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || '';
+        const thumbTimeInput = document.getElementById('thumb-timestamp');
+        if (thumbTimeInput) thumbTimeInput.value = timeStr;
+
         const btn = document.getElementById('btn-player-capture-thumb');
         const origHtml = btn ? btn.innerHTML : '';
         if (btn) {
             btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Saving Thumbnail...</span>`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Extracting Frame at ${timeStr}...</span>`;
         }
 
-        const showCapturedPreview = (thumbUrl, filename) => {
+        const showCapturedPreview = (thumbUrl, filename, capturedTime) => {
+            const displayTime = capturedTime || timeStr || '00:00:00';
             lastCapturedThumbData = {
                 success: true,
                 thumbnailUrl: thumbUrl,
                 downloadUrl: thumbUrl,
-                timestamp: timeStr,
-                filename: filename || `thumbnail_${timeStr.replace(/:/g, '-')}.jpg`
+                timestamp: displayTime,
+                filename: filename || `thumbnail_${displayTime.replace(/:/g, '-')}.jpg`
             };
 
             const card = document.getElementById('captured-thumbnail-card');
@@ -1818,8 +1826,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
                 img.src = thumbUrl;
             }
-            if (label) label.textContent = timeStr;
-            if (overlay) overlay.textContent = timeStr;
+            if (label) label.textContent = displayTime;
+            if (overlay) overlay.textContent = displayTime;
             if (card) {
                 card.classList.remove('hidden');
                 card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1827,9 +1835,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Also populate the Thumbnail Grabber tab view
             const thumbInput = document.getElementById('thumb-url');
-            const thumbTimeInput = document.getElementById('thumb-timestamp');
             if (thumbInput && !thumbInput.value.trim()) thumbInput.value = activeUrl;
-            if (thumbTimeInput) thumbTimeInput.value = timeStr;
+            if (thumbTimeInput) thumbTimeInput.value = displayTime;
             const thumbImg = document.getElementById('thumb-preview-img');
             if (thumbImg) {
                 thumbImg.onerror = function() {
@@ -1842,25 +1849,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const thumbCard = document.getElementById('thumbnail-preview-card');
             if (thumbCard) thumbCard.classList.remove('hidden');
-
-            logToConsole(`[Thumbnail Captured] Thumbnail saved at ${timeStr}! Ready to download.`, 'success');
         };
 
-        const ytId = extractYtId(activeUrl);
-        if (ytId) {
-            // YouTube: Instant direct public CDN image (0ms, zero python, zero bot checks!)
-            const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-            showCapturedPreview(maxRes, `${ytId}_thumb_${timeStr.replace(/:/g, '-')}.jpg`);
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = origHtml;
-            }
-            return;
-        }
+        logToConsole(`[Thumbnail] Extracting frame snapshot at ${timeStr}...`, 'system');
 
-        // Twitch or Kick: Fast public API query without python
         try {
-            const titleVal = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || '';
             const res = await fetch('/api/fetch-thumbnail', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1868,12 +1861,19 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await res.json();
             if (data && data.success && data.thumbnailUrl) {
-                showCapturedPreview(data.thumbnailUrl, data.filename);
+                showCapturedPreview(data.thumbnailUrl, data.filename, timeStr);
+                logToConsole(`[Thumbnail Captured] Extracted video frame at ${timeStr}! Ready to download.`, 'success');
             } else {
-                logToConsole(`[Thumbnail Error] ${data?.error || 'Could not fetch thumbnail'}`, 'error');
+                throw new Error(data?.error || 'Could not extract frame at timestamp');
             }
         } catch (err) {
-            logToConsole(`[Thumbnail Error] ${err.message}`, 'error');
+            logToConsole(`[Thumbnail Notice] Frame extraction fallback: ${err.message}`, 'warning');
+            const ytId = extractYtId(activeUrl);
+            if (ytId) {
+                const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
+                showCapturedPreview(maxRes, `${ytId}_thumb_${timeStr.replace(/:/g, '-')}.jpg`, timeStr);
+                logToConsole(`[Thumbnail Captured] Video cover loaded for ${ytId}.`, 'success');
+            }
         } finally {
             if (btn) {
                 btn.disabled = false;
@@ -2346,6 +2346,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (activeTabId === 'tab-yt-thumbnail') {
                 const url = document.getElementById('thumb-url').value.trim();
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
+                const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
 
                 if (!url) {
                     logToConsole('[Error] Please enter a valid YouTube, Twitch, or Kick URL.', 'error');
@@ -2353,39 +2354,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                const ytId = extractYtId(url);
-                if (ytId) {
-                    const maxResUrl = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-                    const hqUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-                    lastCapturedThumbData = {
-                        success: true,
-                        platform: 'youtube',
-                        thumbnailUrl: maxResUrl,
-                        downloadUrl: maxResUrl,
-                        filename: `${titleVal ? sanitizeFilename(titleVal) : ytId}_thumbnail.jpg`
-                    };
-                    if (thumbPreviewImg) {
-                        thumbPreviewImg.onerror = function() {
-                            this.onerror = null;
-                            this.src = hqUrl;
-                            lastCapturedThumbData.thumbnailUrl = hqUrl;
-                            lastCapturedThumbData.downloadUrl = hqUrl;
-                        };
-                        thumbPreviewImg.src = maxResUrl;
-                    }
-                    if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
-                    logToConsole(`[Success] Loaded high-res thumbnail preview for YouTube video: ${ytId}`, 'success');
-                    resetExecutionState();
-                    return;
-                }
-
-                // Twitch or Kick: Fetch fast via pure Node.js GQL/API (no python)
-                logToConsole(`[Thumbnail] Fetching thumbnail for ${url}...`, 'system');
+                logToConsole(`[Thumbnail] Fetching thumbnail / frame snapshot for ${url}${timeVal ? ` at ${timeVal}` : ''}...`, 'system');
                 try {
                     const res = await fetch('/api/fetch-thumbnail', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, title: titleVal })
+                        body: JSON.stringify({ url, timestamp: timeVal, title: titleVal })
                     });
                     const data = await res.json();
                     if (data && data.success && data.thumbnailUrl) {
@@ -2395,7 +2369,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             thumbPreviewImg.src = data.thumbnailUrl;
                         }
                         if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
-                        logToConsole(`[Success] Thumbnail preview loaded! Ready to download.`, 'success');
+                        logToConsole(`[Success] ${data.isFrame ? `Extracted exact frame at ${data.timestamp || timeVal}!` : 'High-resolution thumbnail loaded!'} Ready to download.`, 'success');
                     } else {
                         logToConsole(`[Thumbnail Error] ${data?.error || 'Failed to fetch thumbnail'}`, 'error');
                     }
