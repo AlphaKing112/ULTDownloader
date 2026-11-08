@@ -213,6 +213,52 @@ body {
     box-shadow: 0 0 8px var(--accent-amber);
 }
 
+.nav-right-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.cookie-status-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cookie-status-btn:hover {
+    border-color: var(--accent-purple-light);
+    color: #ffffff;
+    background: var(--bg-hover);
+}
+
+.cookie-status-btn.active {
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #22c55e;
+}
+
+.cookie-status-btn.active i {
+    color: #22c55e;
+}
+
+.cookie-status-btn.inactive {
+    border-color: rgba(245, 158, 11, 0.4);
+    color: #f59e0b;
+}
+
+.cookie-status-btn.inactive i {
+    color: #f59e0b;
+}
+
 /* Dashboard Grid Layout (Clean 2-Column Responsive View) */
 .dashboard-grid {
     display: grid;

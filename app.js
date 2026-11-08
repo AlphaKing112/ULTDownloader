@@ -3217,6 +3217,120 @@ document.addEventListener('DOMContentLoaded', () => {
         logToConsole('[Folder Preset Set] Target destination configured to "downloads/Clips/"', 'success');
     };
 
+    // --- YouTube Cookie Manager ---
+    window.openCookieModal = async function() {
+        const modal = document.getElementById('cookie-modal-overlay');
+        if (modal) modal.classList.remove('hidden');
+        await updateCookieStatus();
+    };
+
+    window.closeCookieModal = function() {
+        const modal = document.getElementById('cookie-modal-overlay');
+        if (modal) modal.classList.add('hidden');
+    };
+
+    window.updateCookieStatus = async function() {
+        try {
+            const res = await fetch('/api/cookies-status');
+            const data = await res.json();
+            const navLabel = document.getElementById('nav-cookie-status-text');
+            const navBtn = document.getElementById('btn-open-cookie-modal');
+            const modalStatus = document.getElementById('modal-cookie-status-text');
+            const modalBytes = document.getElementById('modal-cookie-bytes');
+
+            if (data && data.success) {
+                if (data.disabled) {
+                    if (navLabel) navLabel.textContent = 'Cookies Off';
+                    if (navBtn) { navBtn.className = 'cookie-status-btn inactive'; }
+                    if (modalStatus) modalStatus.innerHTML = '<span style="color: #f59e0b;">Disabled / Cleared</span>';
+                    if (modalBytes) modalBytes.textContent = '0 bytes';
+                } else if (data.hasCookies) {
+                    if (navLabel) navLabel.textContent = 'Cookies Active';
+                    if (navBtn) { navBtn.className = 'cookie-status-btn active'; }
+                    if (modalStatus) modalStatus.innerHTML = `<span style="color: #22c55e;">Active (${data.lineCount || 'multiple'} cookies loaded)</span>`;
+                    if (modalBytes) modalBytes.textContent = `${(data.size / 1024).toFixed(1)} KB`;
+                } else {
+                    if (navLabel) navLabel.textContent = 'Add Cookies';
+                    if (navBtn) { navBtn.className = 'cookie-status-btn'; }
+                    if (modalStatus) modalStatus.innerHTML = '<span style="color: var(--text-muted);">None Configured</span>';
+                    if (modalBytes) modalBytes.textContent = '0 bytes';
+                }
+            }
+        } catch (e) {
+            console.warn('Could not check cookie status:', e);
+        }
+    };
+
+    window.saveCookiesToServer = async function() {
+        const input = document.getElementById('modal-cookie-input');
+        const text = input ? input.value.trim() : '';
+        if (!text || text.length < 10) {
+            logToConsole('[Cookies] Please paste valid Netscape cookie text into the box.', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById('btn-save-cookies');
+        const origText = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+        }
+
+        try {
+            const res = await fetch('/api/upload-cookies', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cookies: text })
+            });
+            const data = await res.json();
+            if (data && data.success) {
+                logToConsole(`[Cookies] ${data.message}! YouTube authentication updated.`, 'success');
+                if (input) input.value = '';
+                await updateCookieStatus();
+                closeCookieModal();
+            } else {
+                throw new Error(data?.error || 'Failed saving cookies');
+            }
+        } catch (err) {
+            logToConsole(`[Cookies Error] ${err.message}`, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origText;
+            }
+        }
+    };
+
+    window.clearCookiesOnServer = async function() {
+        const btn = document.getElementById('btn-clear-cookies');
+        const origText = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Clearing...';
+        }
+
+        try {
+            const res = await fetch('/api/upload-cookies', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'clear' })
+            });
+            const data = await res.json();
+            if (data && data.success) {
+                logToConsole('[Cookies] Cookies disabled and cleared from server.', 'info');
+                await updateCookieStatus();
+                closeCookieModal();
+            }
+        } catch (err) {
+            logToConsole(`[Cookies Error] ${err.message}`, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origText;
+            }
+        }
+    };
+
     // --- Backend Health Check ---
     async function checkBackendHealth() {
         try {
@@ -3225,6 +3339,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 isServerConnected = true;
                 backendStatusIndicator.className = 'status-indicator online';
                 backendStatusText.textContent = 'Node.js Backend Connected';
+                updateCookieStatus();
             } else {
                 setBackendOffline();
             }

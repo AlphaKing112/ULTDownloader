@@ -40,3 +40,6 @@ logs
 # Python cache
 __pycache__/
 *.pyc
+
+# Local scratch testing
+scratch/

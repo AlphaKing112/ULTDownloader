@@ -18,50 +18,42 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
     } catch (e) {}
 }
 
+let cookiesDisabled = false;
+
+// Initialize cookies on startup once from environment variable if cookies.txt does not exist
+const initialCookiesPath = path.join(__dirname, 'cookies.txt');
+if (process.env.YOUTUBE_COOKIES && !fs.existsSync(initialCookiesPath)) {
+    try {
+        let cookieText = process.env.YOUTUBE_COOKIES.trim();
+        if (cookieText.startsWith('"') && cookieText.endsWith('"')) cookieText = cookieText.slice(1, -1).trim();
+        if (cookieText.startsWith("'") && cookieText.endsWith("'")) cookieText = cookieText.slice(1, -1).trim();
+        if (cookieText.includes('\\n')) cookieText = cookieText.replace(/\\n/g, '\n');
+        if (cookieText.includes('\\t')) cookieText = cookieText.replace(/\\t/g, '\t');
+        if (cookieText.length > 10) {
+            fs.writeFileSync(initialCookiesPath, cookieText, 'utf8');
+            console.log(`[Cookies] Loaded initial YOUTUBE_COOKIES into cookies.txt (${cookieText.length} bytes)`);
+        }
+    } catch (e) {
+        console.error(`[Cookies Error]: Failed writing initial YOUTUBE_COOKIES: ${e.message}`);
+    }
+}
+
 function getCookiesFlag(url = '') {
+    if (cookiesDisabled) return '';
     // ONLY apply YouTube cookies for YouTube links! (Prevents breaking Twitch, Kick, TikTok, etc.)
     if (url && !url.toLowerCase().includes('youtube.com') && !url.toLowerCase().includes('youtu.be')) {
         return '';
     }
 
     const cookiesPath = path.join(__dirname, 'cookies.txt');
-
-    if (process.env.YOUTUBE_COOKIES) {
-        try {
-            let cookieText = process.env.YOUTUBE_COOKIES.trim();
-            if (cookieText.startsWith('"') && cookieText.endsWith('"')) {
-                cookieText = cookieText.slice(1, -1).trim();
-            }
-            if (cookieText.startsWith("'") && cookieText.endsWith("'")) {
-                cookieText = cookieText.slice(1, -1).trim();
-            }
-            if (cookieText.includes('\\n')) {
-                cookieText = cookieText.replace(/\\n/g, '\n');
-            }
-            if (cookieText.includes('\\t')) {
-                cookieText = cookieText.replace(/\\t/g, '\t');
-            }
-            if (cookieText.length > 10) {
-                fs.writeFileSync(cookiesPath, cookieText, 'utf8');
-                console.log(`[Cookies] Successfully loaded YOUTUBE_COOKIES environment variable into cookies.txt (${cookieText.length} bytes)`);
-                return ` --cookies "${cookiesPath}"`;
-            }
-        } catch (e) {
-            console.error(`[Cookies Error]: Failed writing YOUTUBE_COOKIES: ${e.message}`);
-        }
-    }
-
     if (fs.existsSync(cookiesPath)) {
         try {
             const stat = fs.statSync(cookiesPath);
             if (stat.size > 10) {
-                console.log(`[Cookies] Found existing cookies.txt file (${stat.size} bytes)`);
                 return ` --cookies "${cookiesPath}"`;
             }
         } catch (e) {}
     }
-
-    console.log('[Cookies] No YOUTUBE_COOKIES environment variable or cookies.txt file detected.');
     return '';
 }
 
@@ -69,7 +61,7 @@ function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
     const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate Chrome' : '';
     const isYouTube = url && (url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be'));
-    const clientOverride = (!cookiesFlag && isYouTube) ? ' --extractor-args "youtube:player_client=android_vr"' : '';
+    const clientOverride = isYouTube ? ' --extractor-args "youtube:player_client=ios,android,web_embedded"' : '';
     const ytArgs = isYouTube ? ` --force-ipv4 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"${clientOverride} --concurrent-fragments 5` : '';
     if (cookiesFlag) {
         return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
@@ -717,8 +709,8 @@ const server = http.createServer((req, res) => {
                         if (!finalCommand.includes('--concurrent-fragments')) {
                             finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --concurrent-fragments 5');
                         }
-                        if (!cookiesFlag && !finalCommand.includes('--extractor-args')) {
-                            finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=android_vr"');
+                        if (!finalCommand.includes('--extractor-args')) {
+                            finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=ios,android,web_embedded"');
                         }
                     }
                 }
@@ -1039,10 +1031,11 @@ function getYouTubeStoryboard(videoId) {
     }
 
     let ytdlpErr = '';
-    // 1. Try yt-dlp tv_embedded / web_embedded client (bypasses bot checks on datacenter IPs)
+    // 1. Try yt-dlp ios,android,web_embedded client (extracts full storyboard specs without bot challenges)
     try {
         const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-        const cmd = `${ytdlpBin} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=tv_embedded,web_embedded,mweb" "https://www.youtube.com/watch?v=${videoId}"`;
+        const cookiesFlag = getCookiesFlag('https://www.youtube.com');
+        const cmd = `${ytdlpBin}${cookiesFlag} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=ios,android,web_embedded" "https://www.youtube.com/watch?v=${videoId}"`;
         const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
         const data = JSON.parse(out);
         const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
@@ -1064,7 +1057,7 @@ function getYouTubeStoryboard(videoId) {
         }
     } catch (e) {
         ytdlpErr = (e.stderr ? e.stderr.toString() : e.message).slice(0, 300);
-        console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying HTML spec parse fallback...`);
+        console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying fallback...`);
     }
 
     // 2. Fallback: Parse watch page HTML
@@ -1447,6 +1440,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                 }
 
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
+                const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
                 const cleanUrl = url.replace(/"/g, '\\"');
                 const cmd = `${getBaseYtdlpCmd(url)} -j --no-warnings "${cleanUrl}"`;
 
@@ -1454,6 +1448,37 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                     if (error || !stdout || !stdout.trim()) {
                         const errDetail = (stderr || error?.message || 'No metadata returned').trim();
                         console.error(`[Server Metadata Fetch Error]: ${errDetail}`);
+                        if (isYouTube) {
+                            console.log(`[Server Metadata Fallback]: Querying public oEmbed for ${url}`);
+                            const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+                            return fetchWithRedirects(oembedUrl)
+                                .then(resp => {
+                                    let title = '';
+                                    let author = '';
+                                    if (resp.statusCode === 200 && resp.body) {
+                                        try {
+                                            const parsed = JSON.parse(resp.body);
+                                            title = parsed.title || '';
+                                            author = parsed.author_name || '';
+                                        } catch (e) {}
+                                    }
+                                    const metadata = {
+                                        title: title || 'YouTube Video',
+                                        description: `YouTube video by ${author || 'creator'}.`,
+                                        video_tags: [],
+                                        channel_tags: author ? [author] : [],
+                                        channel: author || 'YouTube',
+                                        view_count: null,
+                                        duration_string: ''
+                                    };
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    res.end(JSON.stringify({ success: true, metadata, fallback: true }));
+                                })
+                                .catch(() => {
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    res.end(JSON.stringify({ success: false, error: errDetail }));
+                                });
+                        }
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         return res.end(JSON.stringify({ success: false, error: errDetail }));
                     }
@@ -1672,24 +1697,121 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                 }
 
                 console.log(`[Server Fetching Title]: ${url}`);
-                const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd(url)} --no-playlist --print title --no-warnings "${cleanUrl}"`;
-                
-                exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
-                    if (error || !stdout || !stdout.trim()) {
-                        const errDetail = (stderr || error?.message || 'No title returned').trim();
-                        console.error(`[Server Fetch Title Error]: ${errDetail}`);
+                const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
+
+                // For YouTube, use public oEmbed API first - instantaneous (20ms) and NEVER blocked by bot checks
+                if (isYouTube) {
+                    const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+                    fetchWithRedirects(oembedUrl)
+                        .then(resp => {
+                            if (resp.statusCode === 200 && resp.body) {
+                                try {
+                                    const parsed = JSON.parse(resp.body);
+                                    if (parsed.title) {
+                                        console.log(`[Server Title Fetched via oEmbed]: "${parsed.title}"`);
+                                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                                        return res.end(JSON.stringify({ success: true, title: parsed.title, author: parsed.author_name }));
+                                    }
+                                } catch (e) {}
+                            }
+                            runYtdlpTitleFetch();
+                        })
+                        .catch(() => runYtdlpTitleFetch());
+                    return;
+                }
+
+                runYtdlpTitleFetch();
+
+                function runYtdlpTitleFetch() {
+                    const cleanUrl = url.replace(/"/g, '\\"');
+                    const cmd = `${getBaseYtdlpCmd(url)} --no-playlist --print title --no-warnings "${cleanUrl}"`;
+                    
+                    exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
+                        if (error || !stdout || !stdout.trim()) {
+                            const errDetail = (stderr || error?.message || 'No title returned').trim();
+                            console.error(`[Server Fetch Title Error]: ${errDetail}`);
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            return res.end(JSON.stringify({ success: false, error: errDetail }));
+                        }
+                        const title = stdout.trim().split(/[\r\n]+/)[0].trim();
+                        console.log(`[Server Title Fetched]: "${title}"`);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        return res.end(JSON.stringify({ success: false, error: errDetail }));
-                    }
-                    const title = stdout.trim().split(/[\r\n]+/)[0].trim();
-                    console.log(`[Server Title Fetched]: "${title}"`);
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true, title }));
-                });
+                        res.end(JSON.stringify({ success: true, title }));
+                    });
+                }
             } catch (err) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid payload' }));
+            }
+        });
+        return;
+    }
+
+    // API Cookies Status Endpoint
+    if (pathname === '/api/cookies-status' && req.method === 'GET') {
+        const cookiesPath = path.join(__dirname, 'cookies.txt');
+        const exists = fs.existsSync(cookiesPath);
+        let size = 0;
+        let lineCount = 0;
+        if (exists) {
+            try {
+                const stat = fs.statSync(cookiesPath);
+                size = stat.size;
+                const txt = fs.readFileSync(cookiesPath, 'utf8');
+                lineCount = txt.split('\n').filter(l => l.trim() && !l.startsWith('#')).length;
+            } catch (e) {}
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+            success: true,
+            hasCookies: exists && size > 10,
+            size,
+            lineCount,
+            disabled: cookiesDisabled,
+            hasEnv: Boolean(process.env.YOUTUBE_COOKIES)
+        }));
+    }
+
+    // API Upload / Update Cookies Endpoint (Save new cookies or clear expired ones)
+    if (pathname === '/api/upload-cookies' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const { cookies, action } = JSON.parse(body);
+                const cookiesPath = path.join(__dirname, 'cookies.txt');
+
+                if (action === 'clear') {
+                    cookiesDisabled = true;
+                    if (fs.existsSync(cookiesPath)) {
+                        try { fs.unlinkSync(cookiesPath); } catch (e) {}
+                    }
+                    console.log('[Cookies] Cleared & disabled cookies via web UI');
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: true, message: 'Cookies cleared & disabled' }));
+                }
+
+                if (action === 'toggle') {
+                    cookiesDisabled = !cookiesDisabled;
+                    console.log(`[Cookies] Toggled cookies: ${cookiesDisabled ? 'DISABLED' : 'ENABLED'}`);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: true, disabled: cookiesDisabled }));
+                }
+
+                if (!cookies || typeof cookies !== 'string' || cookies.trim().length < 10) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, error: 'Valid cookies text required' }));
+                }
+
+                const cleanCookies = cookies.trim();
+                fs.writeFileSync(cookiesPath, cleanCookies, 'utf8');
+                cookiesDisabled = false;
+                console.log(`[Cookies] Saved new cookies.txt (${cleanCookies.length} bytes) via web UI`);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, message: `Successfully saved cookies (${cleanCookies.length} bytes)` }));
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
             }
         });
         return;
