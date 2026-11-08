@@ -506,6 +506,14 @@ document.addEventListener('DOMContentLoaded', () => {
     window.fetchFullMetadataForUrl = async function(url) {
         if (!url || !/^https?:\/\//i.test(url)) return;
 
+        // ONLY fetch & display Video Tags & Metadata card when explicitly on the Tags tab!
+        const activeTab = document.querySelector('.nav-tab.active')?.dataset.tab;
+        if (activeTab !== 'tab-yt-tags') {
+            const card = document.getElementById('extracted-results-card');
+            if (card) card.classList.add('hidden');
+            return;
+        }
+
         // ONLY fetch & display Video Tags & Metadata card for YouTube URLs!
         const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
         if (!isYouTube) {
@@ -556,7 +564,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         titleElem.dataset.autoFetched = 'true';
                         fetchTitleForField(pair.urlId, pair.titleId, pair.statusId, true);
                     }
-                    window.fetchFullMetadataForUrl(url);
+                    if (pair.urlId === 'tags-url') {
+                        window.fetchFullMetadataForUrl(url);
+                    }
                     if (pair.urlId === 'thumb-url' && typeof window.resetThumbnailToDefaultCover === 'function') {
                         window.resetThumbnailToDefaultCover();
                     }

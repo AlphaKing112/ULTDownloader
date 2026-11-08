@@ -1108,6 +1108,54 @@ function getYouTubeStoryboard(videoId) {
 }
 
 async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
+    const downloadsDir = path.join(__dirname, 'downloads');
+    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+    const outFilename = `frame_${videoId}_${targetSeconds}s.jpg`;
+    const outFilePath = path.join(downloadsDir, outFilename);
+
+    const formatSeconds = (sec) => {
+        const s = Math.max(0, Math.floor(sec || 0));
+        const hrs = Math.floor(s / 3600);
+        const mins = Math.floor((s % 3600) / 60);
+        const secs = s % 60;
+        return [
+            String(hrs).padStart(2, '0'),
+            String(mins).padStart(2, '0'),
+            String(secs).padStart(2, '0')
+        ].join(':');
+    };
+    const tsFormatted = formatSeconds(targetSeconds);
+
+    // METHOD 1: Direct stream URL extraction via Android client + FFmpeg
+    // Android client is not blocked by datacenter IPs and ffmpeg captures the 100% exact video frame
+    try {
+        console.log(`[Frame Extract] Attempting direct stream extraction for ${videoId} at ${tsFormatted}...`);
+        const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+        const streamCmd = `${ytdlpBin} -g -f "18/best[height<=720]/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=${videoId}"`;
+        const streamUrlRaw = execSync(streamCmd, { encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        const streamUrl = streamUrlRaw.split(/[\r\n]+/)[0].trim();
+
+        if (streamUrl && streamUrl.startsWith('http')) {
+            console.log(`[Frame Extract] Stream URL acquired, extracting exact frame with FFmpeg at ${tsFormatted}...`);
+            const ffmpegCmd = `ffmpeg -y -ss ${tsFormatted} -i "${streamUrl}" -vframes 1 -vf "scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -update 1 "${outFilePath}"`;
+            execSync(ffmpegCmd, { timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
+
+            if (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 1000) {
+                console.log(`[Frame Extract Success] Exact direct frame generated: ${fs.statSync(outFilePath).size} bytes`);
+                const base64Data = fs.readFileSync(outFilePath).toString('base64');
+                return {
+                    filename: outFilename,
+                    base64Url: `data:image/jpeg;base64,${base64Data}`,
+                    width: 1280,
+                    height: 720
+                };
+            }
+        }
+    } catch (streamErr) {
+        console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
+    }
+
+    // METHOD 2: Storyboard sheet extraction fallback
     const sb = getYouTubeStoryboard(videoId);
 
     let sheetUrl = '';
@@ -1161,11 +1209,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         if (sb.sigh) sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${sb.sigh}`;
     }
 
-    const downloadsDir = path.join(__dirname, 'downloads');
-    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
     const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.jpg`);
-    const outFilename = `frame_${videoId}_${targetSeconds}s.jpg`;
-    const outFilePath = path.join(downloadsDir, outFilename);
 
     try {
         // Download storyboard sheet (instant CDN download)
