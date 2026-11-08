@@ -1892,7 +1892,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
             if (data && data.success && data.thumbnailUrl) {
                 showCapturedPreview(data.thumbnailUrl, data.filename, timeStr, data.isFrame !== false);
-                logToConsole(`[Thumbnail Captured] Extracted HD video frame at ${timeStr}! Ready to download.`, 'success');
+                if (data.isFrame) {
+                    logToConsole(`[Thumbnail Captured] Extracted HD video frame at ${timeStr}! Ready to download.`, 'success');
+                } else {
+                    logToConsole(`[Thumbnail Notice] YouTube cloud IP protection active — loaded official 1080p Full HD cover!`, 'info');
+                }
             } else {
                 throw new Error(data?.error || 'Could not extract frame at timestamp');
             }
