@@ -1039,10 +1039,10 @@ function getYouTubeStoryboard(videoId) {
     }
 
     let ytdlpErr = '';
-    // 1. Try yt-dlp android_vr client (0ms bot blocking, 100% reliable on Render & Linux)
+    // 1. Try yt-dlp tv_embedded / web_embedded client (bypasses bot checks on datacenter IPs)
     try {
         const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-        const cmd = `${ytdlpBin} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android_vr" "https://www.youtube.com/watch?v=${videoId}"`;
+        const cmd = `${ytdlpBin} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=tv_embedded,web_embedded,mweb" "https://www.youtube.com/watch?v=${videoId}"`;
         const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
         const data = JSON.parse(out);
         const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
