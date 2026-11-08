@@ -1031,31 +1031,51 @@ function fetchWithRedirects(targetUrl, headers = {}, maxRedirects = 5) {
     });
 }
 
-async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
-    // 1. Fetch YouTube watch page HTML with redirect & consent cookie support
-    let html = '';
+const ytStoryboardCache = new Map();
+
+function getYouTubeStoryboard(videoId) {
+    if (ytStoryboardCache.has(videoId)) {
+        return ytStoryboardCache.get(videoId);
+    }
+
+    // 1. Try yt-dlp android_vr client (0ms bot blocking, 100% reliable on Render & Linux)
     try {
-        const res = await fetchWithRedirects(`https://www.youtube.com/watch?v=${videoId}`);
-        if (res.statusCode === 200 && res.body && res.body.length > 50000) {
-            html = res.body;
+        const cmd = `yt-dlp --dump-json --skip-download --force-ipv4 --extractor-args "youtube:player_client=android_vr" "https://www.youtube.com/watch?v=${videoId}"`;
+        const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8' });
+        const data = JSON.parse(out);
+        const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
+        if (storyboards && storyboards.length > 0) {
+            storyboards.sort((a, b) => (b.width || 0) - (a.width || 0));
+            const best = storyboards[0];
+            if (best && best.fragments && best.fragments.length > 0) {
+                const sbInfo = {
+                    type: 'fragments',
+                    width: best.width || 320,
+                    height: best.height || 180,
+                    rows: best.rows || 3,
+                    columns: best.columns || 3,
+                    fragments: best.fragments
+                };
+                ytStoryboardCache.set(videoId, sbInfo);
+                return sbInfo;
+            }
         }
     } catch (e) {
-        console.warn(`[Storyboard Fetch Warning]: Node fetch failed (${e.message}), trying curl fallback...`);
+        console.warn(`[yt-dlp Storyboard Warning]: ${e.message}. Trying HTML spec parse fallback...`);
     }
 
-    let specMatch = html.match(/"spec":\s*"([^"]+)"/);
-    if (!specMatch) {
-        try {
-            const curlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
-            html = execSync(curlCmd, { maxBuffer: 15 * 1024 * 1024, encoding: 'utf8' });
-            specMatch = html.match(/"spec":\s*"([^"]+)"/);
-        } catch (curlErr) {
-            console.error(`[Storyboard Curl Error]: ${curlErr.message}`);
-        }
+    // 2. Fallback: Parse watch page HTML
+    let html = '';
+    try {
+        const curlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
+        html = execSync(curlCmd, { maxBuffer: 15 * 1024 * 1024, encoding: 'utf8' });
+    } catch (curlErr) {
+        console.error(`[Storyboard Curl Error]: ${curlErr.message}`);
     }
 
+    const specMatch = html.match(/"spec":\s*"([^"]+)"/);
     if (!specMatch) {
-        throw new Error('No storyboard spec found on YouTube page');
+        throw new Error('No storyboard specification found for this video');
     }
 
     const rawSpec = specMatch[1];
@@ -1079,47 +1099,82 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
 
         if (width > bestWidth) {
             bestWidth = width;
-            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1 };
+            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
         }
     }
 
-    if (!bestLevel) {
-        throw new Error('No valid storyboard level parsed');
-    }
+    if (!bestLevel) throw new Error('Could not parse storyboard spec levels');
+    const sbInfo = { type: 'spec', ...bestLevel };
+    ytStoryboardCache.set(videoId, sbInfo);
+    return sbInfo;
+}
 
-    const frameDurationSec = bestLevel.interval > 0 ? (bestLevel.interval / 1000) : 1.0;
-    const frameIndex = Math.min(Math.floor(targetSeconds / frameDurationSec), Math.max(0, bestLevel.count - 1));
-    const framesPerSheet = bestLevel.cols * bestLevel.rows;
-    const sheetIndex = Math.floor(frameIndex / framesPerSheet);
-    const frameInSheet = frameIndex % framesPerSheet;
-    const col = frameInSheet % bestLevel.cols;
-    const row = Math.floor(frameInSheet / bestLevel.cols);
+async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
+    const sb = getYouTubeStoryboard(videoId);
 
-    const cropX = col * bestLevel.width;
-    const cropY = row * bestLevel.height;
+    let sheetUrl = '';
+    let cropX = 0;
+    let cropY = 0;
+    let cellW = 320;
+    let cellH = 180;
 
-    const sheetName = bestLevel.template === 'default' ? 'default' : `M${sheetIndex}`;
-    let sheetUrl = baseUrl.replace('$L', bestLevel.levelIndex).replace('$N', sheetName);
-    if (sheetUrl.includes('$M')) {
-        sheetUrl = sheetUrl.replace('$M', sheetIndex);
-    }
-    if (bestLevel.sigh) {
-        sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${bestLevel.sigh}`;
+    if (sb.type === 'fragments') {
+        cellW = sb.width || 320;
+        cellH = sb.height || 180;
+        let accumulated = 0;
+        let targetFrag = sb.fragments[0];
+
+        for (let i = 0; i < sb.fragments.length; i++) {
+            const f = sb.fragments[i];
+            if (accumulated + f.duration >= targetSeconds || i === sb.fragments.length - 1) {
+                targetFrag = f;
+                break;
+            }
+            accumulated += f.duration;
+        }
+
+        const timeInFrag = Math.max(0, targetSeconds - accumulated);
+        const framesPerSheet = sb.rows * sb.columns;
+        const frameDuration = targetFrag.duration / framesPerSheet;
+        const frameIndexInSheet = Math.min(Math.floor(timeInFrag / (frameDuration || 1)), framesPerSheet - 1);
+        const col = frameIndexInSheet % sb.columns;
+        const row = Math.floor(frameIndexInSheet / sb.columns);
+
+        cropX = col * cellW;
+        cropY = row * cellH;
+        sheetUrl = targetFrag.url;
+    } else {
+        cellW = sb.width || 320;
+        cellH = sb.height || 180;
+        const frameDurationSec = sb.interval > 0 ? (sb.interval / 1000) : 1.0;
+        const frameIndex = Math.min(Math.floor(targetSeconds / frameDurationSec), Math.max(0, sb.count - 1));
+        const framesPerSheet = sb.cols * sb.rows;
+        const sheetIndex = Math.floor(frameIndex / framesPerSheet);
+        const frameInSheet = frameIndex % framesPerSheet;
+        const col = frameInSheet % sb.cols;
+        const row = Math.floor(frameInSheet / sb.cols);
+
+        cropX = col * cellW;
+        cropY = row * cellH;
+
+        const sheetName = sb.template === 'default' ? 'default' : `M${sheetIndex}`;
+        sheetUrl = sb.baseUrl.replace('$L', sb.levelIndex).replace('$N', sheetName);
+        if (sheetUrl.includes('$M')) sheetUrl = sheetUrl.replace('$M', sheetIndex);
+        if (sb.sigh) sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${sb.sigh}`;
     }
 
     const downloadsDir = path.join(__dirname, 'downloads');
     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
-    const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.webp`);
+    const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.jpg`);
     const outFilename = `frame_${videoId}_${targetSeconds}s.jpg`;
     const outFilePath = path.join(downloadsDir, outFilename);
 
     try {
-        // Download storyboard sheet via curl (rock-solid on Linux and Windows)
+        // Download storyboard sheet (instant CDN download)
         try {
             const dlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o "${tempSheet}" "${sheetUrl}"`;
             execSync(dlCmd, { stdio: 'pipe' });
         } catch (dlErr) {
-            // Fallback to Node https stream
             const sheetBuf = await new Promise((resolve, reject) => {
                 https.get(sheetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
                     if (res.statusCode !== 200) return reject(new Error(`Sheet HTTP ${res.statusCode}`));
@@ -1131,12 +1186,12 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
             fs.writeFileSync(tempSheet, sheetBuf);
         }
 
-        if (!fs.existsSync(tempSheet) || fs.statSync(tempSheet).size < 1000) {
+        if (!fs.existsSync(tempSheet) || fs.statSync(tempSheet).size < 500) {
             throw new Error('Storyboard sheet failed to download or is empty');
         }
 
-        // Crop exact frame and upscale to crisp 1280x720 HD using Lanczos interpolation + unsharp edge filter
-        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${bestLevel.width}:${bestLevel.height}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
+        // Crop exact frame and upscale with Lanczos interpolation + unsharp edge filter to crisp 1280x720 HD
+        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
         execSync(cmd, { stdio: 'pipe' });
 
         if (!fs.existsSync(outFilePath)) {
