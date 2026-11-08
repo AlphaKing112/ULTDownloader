@@ -1820,11 +1820,17 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
             tests.ffmpegVersion = execSync('ffmpeg -version', { encoding: 'utf8', timeout: 5000 }).split('\n')[0];
         } catch (e) { tests.ffmpegVersion = e.message; }
 
-        try {
-            const out = execSync(`${ytdlpBin} -g -f 18 --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=rz1B4B2yBZY"`, { encoding: 'utf8', timeout: 20000, stdio: ['pipe', 'pipe', 'pipe'] });
-            tests.streamUrl = out.trim().split(/[\r\n]+/)[0];
-        } catch (e) {
-            tests.streamUrlErr = (e.stderr ? e.stderr.toString() : e.message);
+        // Test clients: android, tv, ios, mweb
+        const clientsToTest = ['android', 'tv', 'ios', 'mweb'];
+        tests.clients = {};
+        for (const cl of clientsToTest) {
+            try {
+                const out = execSync(`${ytdlpBin} -g -f "best[height<=720]/18/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=${cl}" "https://www.youtube.com/watch?v=rz1B4B2yBZY"`, { encoding: 'utf8', timeout: 12000, stdio: ['pipe', 'pipe', 'pipe'] });
+                tests.clients[cl] = { success: true, url: out.trim().split(/[\r\n]+/)[0].slice(0, 50) + '...' };
+            } catch (e) {
+                const errMsg = (e.stderr ? e.stderr.toString() : e.message).trim().split(/[\r\n]+/)[0];
+                tests.clients[cl] = { success: false, error: errMsg };
+            }
         }
 
         try {
