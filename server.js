@@ -1038,10 +1038,12 @@ function getYouTubeStoryboard(videoId) {
         return ytStoryboardCache.get(videoId);
     }
 
+    let ytdlpErr = '';
     // 1. Try yt-dlp android_vr client (0ms bot blocking, 100% reliable on Render & Linux)
     try {
-        const cmd = `yt-dlp --dump-json --skip-download --force-ipv4 --extractor-args "youtube:player_client=android_vr" "https://www.youtube.com/watch?v=${videoId}"`;
-        const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8' });
+        const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+        const cmd = `${ytdlpBin} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android_vr" "https://www.youtube.com/watch?v=${videoId}"`;
+        const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
         const data = JSON.parse(out);
         const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
         if (storyboards && storyboards.length > 0) {
@@ -1061,21 +1063,24 @@ function getYouTubeStoryboard(videoId) {
             }
         }
     } catch (e) {
-        console.warn(`[yt-dlp Storyboard Warning]: ${e.message}. Trying HTML spec parse fallback...`);
+        ytdlpErr = (e.stderr ? e.stderr.toString() : e.message).slice(0, 300);
+        console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying HTML spec parse fallback...`);
     }
 
     // 2. Fallback: Parse watch page HTML
     let html = '';
+    let curlErr = '';
     try {
         const curlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
         html = execSync(curlCmd, { maxBuffer: 15 * 1024 * 1024, encoding: 'utf8' });
-    } catch (curlErr) {
-        console.error(`[Storyboard Curl Error]: ${curlErr.message}`);
+    } catch (err) {
+        curlErr = err.message;
+        console.error(`[Storyboard Curl Error]: ${curlErr}`);
     }
 
     const specMatch = html.match(/"spec":\s*"([^"]+)"/);
     if (!specMatch) {
-        throw new Error('No storyboard specification found for this video');
+        throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, curl: ${curlErr || 'no spec match'})`);
     }
 
     const rawSpec = specMatch[1];
