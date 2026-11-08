@@ -1128,17 +1128,33 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
 
     // METHOD 1: Direct stream URL extraction via Android client + FFmpeg
     // Android client is not blocked by datacenter IPs and ffmpeg captures the 100% exact video frame
+    let streamErrDetail = '';
     try {
         console.log(`[Frame Extract] Attempting direct stream extraction for ${videoId} at ${tsFormatted}...`);
         const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-        const streamCmd = `${ytdlpBin} -g -f "18/best[height<=720]/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=${videoId}"`;
-        const streamUrlRaw = execSync(streamCmd, { encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-        const streamUrl = streamUrlRaw.split(/[\r\n]+/)[0].trim();
+        const cookiesFlag = getCookiesFlag('https://www.youtube.com');
+        
+        let streamUrl = '';
+        // Try first with cookies (if available), then without cookies
+        const attempts = [cookiesFlag, ''];
+        for (const cFlag of attempts) {
+            try {
+                const streamCmd = `${ytdlpBin}${cFlag} -g -f "18/best[height<=720]/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=${videoId}"`;
+                const streamUrlRaw = execSync(streamCmd, { encoding: 'utf8', timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+                const matched = streamUrlRaw.match(/https?:\/\/[^\r\n]+/);
+                if (matched && matched[0]) {
+                    streamUrl = matched[0];
+                    break;
+                }
+            } catch (attErr) {
+                streamErrDetail = attErr.message;
+            }
+        }
 
         if (streamUrl && streamUrl.startsWith('http')) {
             console.log(`[Frame Extract] Stream URL acquired, extracting exact frame with FFmpeg at ${tsFormatted}...`);
-            const ffmpegCmd = `ffmpeg -y -ss ${tsFormatted} -i "${streamUrl}" -vframes 1 -vf "scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -update 1 "${outFilePath}"`;
-            execSync(ffmpegCmd, { timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
+            const ffmpegCmd = `ffmpeg -y -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -ss ${tsFormatted} -i "${streamUrl}" -vframes 1 -vf "scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -update 1 "${outFilePath}"`;
+            execSync(ffmpegCmd, { timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] });
 
             if (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 1000) {
                 console.log(`[Frame Extract Success] Exact direct frame generated: ${fs.statSync(outFilePath).size} bytes`);
@@ -1152,6 +1168,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
             }
         }
     } catch (streamErr) {
+        streamErrDetail = streamErr.message;
         console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
     }
 
