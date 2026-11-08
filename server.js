@@ -1003,22 +1003,57 @@ function parseTimestampToSeconds(ts) {
     return 0;
 }
 
-async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
-    // 1. Fetch YouTube watch page HTML (0ms bot blocking, public web)
-    const html = await new Promise((resolve, reject) => {
-        https.get(`https://www.youtube.com/watch?v=${videoId}`, {
+function fetchWithRedirects(targetUrl, headers = {}, maxRedirects = 5) {
+    return new Promise((resolve, reject) => {
+        if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
+
+        const client = targetUrl.startsWith('https') ? https : http;
+        client.get(targetUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept-Language': 'en-US,en;q=0.9'
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cookie': 'CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; PREF=hl=en',
+                ...headers
             }
         }, res => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                let redirectUrl = res.headers.location;
+                if (!redirectUrl.startsWith('http')) {
+                    const u = new URL(targetUrl);
+                    redirectUrl = `${u.protocol}//${u.host}${redirectUrl}`;
+                }
+                return resolve(fetchWithRedirects(redirectUrl, headers, maxRedirects - 1));
+            }
             let data = '';
             res.on('data', c => data += c);
-            res.on('end', () => resolve(data));
+            res.on('end', () => resolve({ statusCode: res.statusCode, body: data }));
         }).on('error', reject);
     });
+}
 
-    const specMatch = html.match(/"spec":\s*"([^"]+)"/);
+async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
+    // 1. Fetch YouTube watch page HTML with redirect & consent cookie support
+    let html = '';
+    try {
+        const res = await fetchWithRedirects(`https://www.youtube.com/watch?v=${videoId}`);
+        if (res.statusCode === 200 && res.body && res.body.length > 50000) {
+            html = res.body;
+        }
+    } catch (e) {
+        console.warn(`[Storyboard Fetch Warning]: Node fetch failed (${e.message}), trying curl fallback...`);
+    }
+
+    let specMatch = html.match(/"spec":\s*"([^"]+)"/);
+    if (!specMatch) {
+        try {
+            const curlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
+            html = execSync(curlCmd, { maxBuffer: 15 * 1024 * 1024, encoding: 'utf8' });
+            specMatch = html.match(/"spec":\s*"([^"]+)"/);
+        } catch (curlErr) {
+            console.error(`[Storyboard Curl Error]: ${curlErr.message}`);
+        }
+    }
+
     if (!specMatch) {
         throw new Error('No storyboard spec found on YouTube page');
     }
@@ -1052,7 +1087,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         throw new Error('No valid storyboard level parsed');
     }
 
-    const frameDurationSec = bestLevel.interval > 0 ? (bestLevel.interval / 1000) : 2.0;
+    const frameDurationSec = bestLevel.interval > 0 ? (bestLevel.interval / 1000) : 1.0;
     const frameIndex = Math.min(Math.floor(targetSeconds / frameDurationSec), Math.max(0, bestLevel.count - 1));
     const framesPerSheet = bestLevel.cols * bestLevel.rows;
     const sheetIndex = Math.floor(frameIndex / framesPerSheet);
@@ -1072,21 +1107,6 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${bestLevel.sigh}`;
     }
 
-    const sheetBuf = await new Promise((resolve, reject) => {
-        https.get(sheetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-            }
-        }, res => {
-            if (res.statusCode !== 200) {
-                return reject(new Error(`Failed to download storyboard sheet: HTTP ${res.statusCode}`));
-            }
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => resolve(Buffer.concat(chunks)));
-        }).on('error', reject);
-    });
-
     const downloadsDir = path.join(__dirname, 'downloads');
     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
     const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.webp`);
@@ -1094,10 +1114,34 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
     const outFilePath = path.join(downloadsDir, outFilename);
 
     try {
-        fs.writeFileSync(tempSheet, sheetBuf);
-        // Crop and upscale with Lanczos interpolation + unsharp mask to crisp 1280x720 HD
+        // Download storyboard sheet via curl (rock-solid on Linux and Windows)
+        try {
+            const dlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o "${tempSheet}" "${sheetUrl}"`;
+            execSync(dlCmd, { stdio: 'pipe' });
+        } catch (dlErr) {
+            // Fallback to Node https stream
+            const sheetBuf = await new Promise((resolve, reject) => {
+                https.get(sheetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+                    if (res.statusCode !== 200) return reject(new Error(`Sheet HTTP ${res.statusCode}`));
+                    const chunks = [];
+                    res.on('data', c => chunks.push(c));
+                    res.on('end', () => resolve(Buffer.concat(chunks)));
+                }).on('error', reject);
+            });
+            fs.writeFileSync(tempSheet, sheetBuf);
+        }
+
+        if (!fs.existsSync(tempSheet) || fs.statSync(tempSheet).size < 1000) {
+            throw new Error('Storyboard sheet failed to download or is empty');
+        }
+
+        // Crop exact frame and upscale to crisp 1280x720 HD using Lanczos interpolation + unsharp edge filter
         const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${bestLevel.width}:${bestLevel.height}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
         execSync(cmd, { stdio: 'pipe' });
+
+        if (!fs.existsSync(outFilePath)) {
+            throw new Error('ffmpeg failed to generate output frame file');
+        }
 
         const base64Data = fs.readFileSync(outFilePath).toString('base64');
         return {
@@ -1158,19 +1202,21 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                                 }));
                             }
                         } catch (err) {
-                            console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to snapshot/cover.`);
-                            const snapNum = sec <= 30 ? 1 : 2;
-                            const snapUrl = `https://img.youtube.com/vi/${ytId}/${snapNum}.jpg`;
+                            console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to official 1080p cover.`);
+                            const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
+                            const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             return res.end(JSON.stringify({
                                 success: true,
                                 platform: 'youtube',
                                 id: ytId,
-                                isFrame: true,
-                                thumbnailUrl: snapUrl,
-                                downloadUrl: snapUrl,
-                                timestamp: timestamp,
-                                filename: `${cleanTitle}_snapshot_${String(timestamp).replace(/:/g, '-')}.jpg`
+                                isFrame: false,
+                                thumbnailUrl: maxRes,
+                                downloadUrl: maxRes,
+                                fallbackUrl: hqRes,
+                                timestamp: '00:00:00',
+                                filename: `${cleanTitle}_default_cover_1080p.jpg`,
+                                errorNotice: `Timeline frame extraction error: ${err.message}. Loaded official 1080p HD default cover.`
                             }));
                         }
                     }
