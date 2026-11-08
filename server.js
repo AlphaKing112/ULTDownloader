@@ -1166,7 +1166,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
 
         if (streamUrl && streamUrl.startsWith('http')) {
             console.log(`[Frame Extract] Stream URL acquired, extracting exact frame with FFmpeg at ${tsFormatted}...`);
-            const ffmpegCmd = `ffmpeg -y -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -ss ${tsFormatted} -i "${streamUrl}" -vframes 1 -vf "scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -update 1 "${outFilePath}"`;
+            const ffmpegCmd = `ffmpeg -y -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -ss ${tsFormatted} -i "${streamUrl}" -vframes 1 -vf "scale=1920:1080:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 "${outFilePath}"`;
             execSync(ffmpegCmd, { timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] });
 
             if (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 1000) {
@@ -1175,8 +1175,8 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                 return {
                     filename: outFilename,
                     base64Url: `data:image/jpeg;base64,${base64Data}`,
-                    width: 1280,
-                    height: 720
+                    width: 1920,
+                    height: 1080
                 };
             }
         }
@@ -1274,8 +1274,8 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}${sheetExt}`);
         fs.writeFileSync(tempSheet, sheetData.buf);
 
-        // Crop exact frame and upscale directly to memory buffer via FFmpeg pipe:1
-        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1280:720" -vframes 1 -f image2 -c:v mjpeg pipe:1`;
+        // Crop exact frame and upscale directly to 1080p Full HD memory buffer via FFmpeg pipe:1
+        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1920:1080:flags=lanczos" -vframes 1 -f image2 -c:v mjpeg pipe:1`;
         let jpegBuf;
         try {
             jpegBuf = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, windowsHide: true });
@@ -1294,8 +1294,8 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         return {
             filename: outFilename,
             base64Url: `data:image/jpeg;base64,${base64Data}`,
-            width: 1280,
-            height: 720
+            width: 1920,
+            height: 1080
         };
     } finally {
         try {
