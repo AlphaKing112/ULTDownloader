@@ -1229,25 +1229,36 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
     const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.jpg`);
 
     try {
-        // Download storyboard sheet (instant CDN download)
-        try {
-            const dlCmd = `curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o "${tempSheet}" "${sheetUrl}"`;
-            execSync(dlCmd, { stdio: 'pipe' });
-        } catch (dlErr) {
-            const sheetBuf = await new Promise((resolve, reject) => {
-                https.get(sheetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
-                    if (res.statusCode !== 200) return reject(new Error(`Sheet HTTP ${res.statusCode}`));
-                    const chunks = [];
-                    res.on('data', c => chunks.push(c));
-                    res.on('end', () => resolve(Buffer.concat(chunks)));
-                }).on('error', reject);
+        // Download storyboard sheet via native https (prevents shell $ variable expansion corruption in sigh signature)
+        const sheetBuf = await new Promise((resolve, reject) => {
+            const req = https.get(sheetUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                }
+            }, res => {
+                if (res.statusCode !== 200) {
+                    return reject(new Error(`Storyboard CDN returned HTTP ${res.statusCode}`));
+                }
+                const chunks = [];
+                res.on('data', c => chunks.push(c));
+                res.on('end', () => {
+                    const buf = Buffer.concat(chunks);
+                    if (buf.length < 500) {
+                        return reject(new Error('Storyboard sheet download too small'));
+                    }
+                    // Validate JPEG header: 0xFF 0xD8
+                    if (buf[0] !== 0xFF || buf[1] !== 0xD8) {
+                        return reject(new Error(`Storyboard file is not a valid JPEG (received ${buf.slice(0, 30).toString()})`));
+                    }
+                    resolve(buf);
+                });
             });
-            fs.writeFileSync(tempSheet, sheetBuf);
-        }
+            req.on('error', reject);
+            req.setTimeout(12000, () => { req.destroy(); reject(new Error('Storyboard download timeout')); });
+        });
 
-        if (!fs.existsSync(tempSheet) || fs.statSync(tempSheet).size < 500) {
-            throw new Error('Storyboard sheet failed to download or is empty');
-        }
+        fs.writeFileSync(tempSheet, sheetBuf);
 
         // Crop exact frame and upscale with Lanczos interpolation + unsharp edge filter to crisp 1280x720 HD
         const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
