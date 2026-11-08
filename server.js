@@ -1095,15 +1095,16 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
 
     try {
         fs.writeFileSync(tempSheet, sheetBuf);
-        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${bestLevel.width}:${bestLevel.height}:${cropX}:${cropY}" -frames:v 1 -update 1 "${outFilePath}"`;
+        // Crop and upscale with Lanczos interpolation + unsharp mask to crisp 1280x720 HD
+        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${bestLevel.width}:${bestLevel.height}:${cropX}:${cropY},scale=1280:720:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 -frames:v 1 -update 1 "${outFilePath}"`;
         execSync(cmd, { stdio: 'pipe' });
 
         const base64Data = fs.readFileSync(outFilePath).toString('base64');
         return {
             filename: outFilename,
             base64Url: `data:image/jpeg;base64,${base64Data}`,
-            width: bestLevel.width,
-            height: bestLevel.height
+            width: 1280,
+            height: 720
         };
     } finally {
         try { if (fs.existsSync(tempSheet)) fs.unlinkSync(tempSheet); } catch (e) {}
@@ -1174,7 +1175,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                         }
                     }
 
-                    // Default official video cover thumbnail
+                    // Default official video cover thumbnail (Full HD/4K)
                     const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
                     const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
 
@@ -1185,9 +1186,10 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                         id: ytId,
                         isFrame: false,
                         thumbnailUrl: maxRes,
+                        downloadUrl: maxRes,
                         fallbackUrl: hqRes,
-                        timestamp: timestamp || '00:00:00',
-                        filename: `${cleanTitle}_thumbnail.jpg`
+                        timestamp: '00:00:00',
+                        filename: `${cleanTitle}_default_cover.jpg`
                     }));
                 }
 

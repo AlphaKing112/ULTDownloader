@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.1">
+    <link rel="stylesheet" href="style.css?v=3.2">
 </head>
 <body>
     <div class="app-container">
@@ -596,8 +596,11 @@
                                 <button type="button" class="btn-sync-player" onclick="syncThumbnailTimeFromPlayer()" title="Capture timestamp from active player">
                                     <i class="fa-solid fa-camera"></i> From Player
                                 </button>
+                                <button type="button" class="btn-reset-cover" onclick="resetThumbnailToDefaultCover()" title="Clear timestamp and load official high-resolution default cover">
+                                    <i class="fa-solid fa-rotate-left"></i> Default Cover
+                                </button>
                             </div>
-                            <span class="field-hint margin-top-xs"><i class="fa-solid fa-circle-info"></i> Leave blank for video cover, or scrub player & click <strong>From Player</strong>.</span>
+                            <span class="field-hint margin-top-xs"><i class="fa-solid fa-circle-info"></i> Leave blank or click <strong>Default Cover</strong> for crystal-clear HD video cover, or scrub player & click <strong>From Player</strong>.</span>
                         </div>
 
                         <div class="form-group">
@@ -619,8 +622,11 @@
                                 <img id="thumb-preview-img" alt="Video Thumbnail Preview">
                             </div>
                             <div class="thumb-card-actions">
-                                <button type="button" class="btn btn-primary btn-sm" id="thumb-download-btn" onclick="downloadThumbnailImage()">
+                                <button type="button" class="btn btn-primary btn-sm" id="thumb-download-btn" onclick="downloadThumbnailImage()" title="Download current preview (Default cover if 00:00:00, or timestamp frame)">
                                     <i class="fa-solid fa-download"></i> Download JPG
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="thumb-download-cover-btn" onclick="downloadDefaultCoverThumbnail()" title="Always download the full official default cover in maximum resolution (HD/4K)">
+                                    <i class="fa-regular fa-image"></i> Default Cover (HD)
                                 </button>
                             </div>
                         </div>
@@ -737,7 +743,10 @@
                             </div>
                             <div class="captured-thumb-actions">
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-download-captured-thumb" onclick="downloadCapturedThumbnail()">
-                                    <i class="fa-solid fa-download"></i> Download JPG
+                                    <i class="fa-solid fa-download"></i> Download Frame JPG
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadDefaultCoverThumbnail()" title="Download official high-resolution default cover">
+                                    <i class="fa-regular fa-image"></i> Default Cover (HD)
                                 </button>
                                 <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-captured-thumb" onclick="copyCapturedThumbToClipboard()">
                                     <i class="fa-regular fa-copy"></i> Copy Image
@@ -941,6 +950,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=3.1"></script>
+    <script src="app.js?v=3.2"></script>
 </body>
 </html>
