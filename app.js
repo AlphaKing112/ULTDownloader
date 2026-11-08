@@ -3019,18 +3019,33 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.downloadThumbnailImage = async function() {
-        const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
-        const isDefaultZero = !timeVal || timeVal === '0' || timeVal === '00:00:00' || timeVal === '0:00' || timeVal === '00:00';
-
-        // Requirement: "if default 0 download default cover thumbnail"
-        if (isDefaultZero) {
-            return downloadDefaultCoverThumbnail();
-        }
-
+        // 1. If we already have a captured frame in memory, download it directly!
         if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl && lastCapturedThumbData.isFrame) {
             return downloadCapturedThumbnail();
         }
 
+        // 2. Check if a timestamp is specified in the input OR if the active video player is scrubbed to a timestamp
+        let timeVal = document.getElementById('thumb-timestamp')?.value.trim();
+        const playerSec = getPlayerCurrentTime();
+        if ((!timeVal || timeVal === '00:00:00' || timeVal === '0') && playerSec > 0) {
+            timeVal = formatSecondsToHHMMSS(playerSec);
+            const thumbTimeInput = document.getElementById('thumb-timestamp');
+            if (thumbTimeInput) thumbTimeInput.value = timeVal;
+        }
+
+        const isDefaultZero = !timeVal || timeVal === '0' || timeVal === '00:00:00' || timeVal === '0:00' || timeVal === '00:00';
+
+        // 3. If genuinely at 00:00:00 (default), download the official 1080p cover
+        if (isDefaultZero) {
+            return downloadDefaultCoverThumbnail();
+        }
+
+        // 4. Otherwise, trigger frame capture at this timestamp right now and then download it!
+        logToConsole(`[Thumbnail] Capturing exact frame at ${timeVal}...`, 'system');
+        await captureThumbnailFromPlayer();
+        if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl) {
+            return downloadCapturedThumbnail();
+        }
         return downloadDefaultCoverThumbnail();
     };
 
