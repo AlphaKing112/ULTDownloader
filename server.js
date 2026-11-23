@@ -3,6 +3,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { exec, execFile, spawn, execSync } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const crypto = require('crypto');
 const urlModule = require('url');
 
@@ -564,6 +566,468 @@ function processLogs(rawText, defaultType = 'info') {
         }
     }
     return logs;
+}
+
+function parseTimestampToSeconds(ts) {
+    if (!ts) return 0;
+    if (typeof ts === 'number') return Math.max(0, ts);
+    const str = String(ts).trim();
+    if (!str) return 0;
+    const parts = str.split(':').map(Number);
+    if (parts.some(isNaN)) return 0;
+    if (parts.length === 3) {
+        return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else if (parts.length === 2) {
+        return parts[0] * 60 + parts[1];
+    } else if (parts.length === 1) {
+        return parts[0];
+    }
+    return 0;
+}
+
+function fetchWithRedirects(targetUrl, headers = {}, maxRedirects = 5) {
+    return new Promise((resolve, reject) => {
+        if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
+
+        const client = targetUrl.startsWith('https') ? https : http;
+        const req = client.get(targetUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cookie': 'CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; PREF=hl=en',
+                ...headers
+            }
+        }, res => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                let redirectUrl = res.headers.location;
+                if (!redirectUrl.startsWith('http')) {
+                    const u = new URL(targetUrl);
+                    redirectUrl = `${u.protocol}//${u.host}${redirectUrl}`;
+                }
+                return resolve(fetchWithRedirects(redirectUrl, headers, maxRedirects - 1));
+            }
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => resolve({ statusCode: res.statusCode, body: data }));
+        });
+        req.on('error', reject);
+        req.setTimeout(6000, () => { req.destroy(); reject(new Error('HTTP fetch timeout')); });
+    });
+}
+
+const ytStoryboardCache = new Map(); // videoId -> { info, expires }
+const ytCoverCache = new Map(); // videoId -> { url, qualityLabel, width, height, expires }
+const ytStreamCache = new Map(); // videoId -> { url, expires }
+const ytFrameResultCache = new Map(); // dedupeKey -> { data, expires } (max 8 entries)
+const inFlightFrameExtractions = new Map(); // `${videoId}:${sec}:${ext}` -> Promise
+
+function getYouTubeCookieHeader() {
+    if (cookiesDisabled) return '';
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    if (!fs.existsSync(cookiesPath)) return '';
+    try {
+        const lines = fs.readFileSync(cookiesPath, 'utf8').split(/\r?\n/);
+        const pairs = [];
+        for (const l of lines) {
+            if (!l.trim() || l.startsWith('#')) continue;
+            const cols = l.split('\t');
+            if (cols.length >= 7 && (cols[0].includes('youtube.com') || cols[0].includes('google.com'))) {
+                pairs.push(`${cols[5]}=${cols[6].trim()}`);
+            }
+        }
+        return pairs.join('; ');
+    } catch (e) {
+        return '';
+    }
+}
+
+function extractYouTubeVideoId(rawUrl = '') {
+    const str = String(rawUrl || '').trim();
+    if (!str) return '';
+    const pathMatch = str.match(/(?:youtube\.com\/(?:shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?&#\/]|$)/i);
+    if (pathMatch && pathMatch[1]) return pathMatch[1];
+    const queryMatch = str.match(/[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)/i);
+    if (queryMatch && queryMatch[1]) return queryMatch[1];
+    return '';
+}
+
+function checkImageExistsHead(imgUrl) {
+    return new Promise((resolve) => {
+        const req = https.request(imgUrl, { method: 'HEAD', timeout: 4000 }, res => {
+            resolve(res.statusCode >= 200 && res.statusCode < 300);
+        });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.end();
+    });
+}
+
+async function resolveBestYouTubeCover(videoId) {
+    const cached = ytCoverCache.get(videoId);
+    if (cached && cached.expires > Date.now()) return cached;
+
+    const candidates = [
+        { url: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`, qualityLabel: '1080p / 720p HD MaxRes', width: 1280, height: 720 },
+        { url: `https://img.youtube.com/vi/${videoId}/hq720.jpg`, qualityLabel: '720p HD Cover', width: 1280, height: 720 },
+        { url: `https://img.youtube.com/vi/${videoId}/sddefault.jpg`, qualityLabel: '480p SD Cover', width: 640, height: 480 },
+        { url: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`, qualityLabel: '360p HQ Fallback', width: 480, height: 360 }
+    ];
+
+    for (const c of candidates) {
+        const ok = await checkImageExistsHead(c.url);
+        if (ok) {
+            const entry = { ...c, expires: Date.now() + 15 * 60 * 1000 };
+            ytCoverCache.set(videoId, entry);
+            return entry;
+        }
+    }
+    return { ...candidates[3], expires: Date.now() + 60 * 1000 };
+}
+
+function setBoundedStoryboardCache(videoId, sbInfo) {
+    if (ytStoryboardCache.size >= 30) {
+        const oldestKey = ytStoryboardCache.keys().next().value;
+        ytStoryboardCache.delete(oldestKey);
+    }
+    ytStoryboardCache.set(videoId, { info: sbInfo, expires: Date.now() + 30 * 60 * 1000 });
+}
+
+async function getYouTubeStoryboard(videoId, { skipYtdlp = false } = {}) {
+    const cachedSb = ytStoryboardCache.get(videoId);
+    if (cachedSb && cachedSb.expires > Date.now()) {
+        return cachedSb.info;
+    }
+
+    let ytdlpErr = '';
+    const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    const cookiesFlag = getCookiesFlag('https://www.youtube.com');
+    const hasCookies = Boolean(cookiesFlag && fs.existsSync(cookiesPath));
+
+    if (!skipYtdlp) {
+        try {
+            const clients = hasCookies ? 'web_safari,mweb,web,tv' : 'android,ios,web_creator,tv';
+            const args = [
+                ...(hasCookies ? ['--cookies', cookiesPath] : []),
+                '--dump-json', '--skip-download', '--force-ipv4', '--no-warnings',
+                '--js-runtimes', 'node',
+                '--extractor-args', `youtube:player_client=${clients}`,
+                `https://www.youtube.com/watch?v=${videoId}`
+            ];
+            const { stdout } = await execFileAsync(ytdlpBin, args, { maxBuffer: 25 * 1024 * 1024, timeout: 12000, windowsHide: true });
+            const data = JSON.parse(stdout);
+            const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
+            if (storyboards && storyboards.length > 0) {
+                storyboards.sort((a, b) => (b.width || 0) - (a.width || 0));
+                const best = storyboards[0];
+                if (best && best.fragments && best.fragments.length > 0) {
+                    const sbInfo = {
+                        type: 'fragments',
+                        width: best.width || 320,
+                        height: best.height || 180,
+                        rows: best.rows || 3,
+                        columns: best.columns || 3,
+                        fragments: best.fragments
+                    };
+                    setBoundedStoryboardCache(videoId, sbInfo);
+                    return sbInfo;
+                }
+            }
+        } catch (e) {
+            ytdlpErr = (e.stderr ? e.stderr.toString() : e.message).slice(0, 300);
+            console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying native https fallback...`);
+        }
+    } else {
+        ytdlpErr = 'Skipped duplicate yt-dlp check after cloud bot gate';
+    }
+
+    let html = '';
+    let fetchErr = '';
+    const ytCookieHdr = getYouTubeCookieHeader();
+    const consentCookie = 'CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; PREF=hl=en';
+    const combinedCookie = ytCookieHdr ? `${consentCookie}; ${ytCookieHdr}` : consentCookie;
+
+    try {
+        const resp = await fetchWithRedirects(`https://www.youtube.com/watch?v=${videoId}`, { 'Cookie': combinedCookie });
+        if (resp && resp.body) html = resp.body;
+    } catch (e) {
+        fetchErr = e.message;
+    }
+
+    let specMatch = html.match(/"spec":\s*"([^"]+)"/);
+    if (!specMatch) {
+        const unescaped = html.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        specMatch = unescaped.match(/"spec":\s*"([^"]+)"/);
+    }
+
+    if (!specMatch || !specMatch[1]) {
+        throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, fetch: ${fetchErr || 'no spec match'})`);
+    }
+
+    const rawSpec = specMatch[1];
+    const parts = rawSpec.split('|');
+    const baseUrl = parts[0];
+
+    let bestLevel = null;
+    let bestWidth = 0;
+
+    for (let i = 1; i < parts.length; i++) {
+        const segs = parts[i].split('#');
+        if (segs.length < 8) continue;
+        const width = parseInt(segs[0], 10);
+        const height = parseInt(segs[1], 10);
+        const count = parseInt(segs[2], 10);
+        const cols = parseInt(segs[3], 10);
+        const rows = parseInt(segs[4], 10);
+        const interval = parseInt(segs[5], 10);
+        const template = segs[6];
+        const sigh = segs[7];
+
+        if (width > bestWidth) {
+            bestWidth = width;
+            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
+        }
+    }
+
+    if (!bestLevel) throw new Error('Could not parse storyboard spec levels');
+    const sbInfo = { type: 'spec', ...bestLevel };
+    setBoundedStoryboardCache(videoId, sbInfo);
+    return sbInfo;
+}
+
+async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jpg') {
+    const imgFormat = String(format || 'jpg').toLowerCase() === 'png' ? 'png' : 'jpg';
+    const dedupeKey = `${videoId}:${Math.floor(targetSeconds)}:${imgFormat}`;
+    const cachedFrame = ytFrameResultCache.get(dedupeKey);
+    if (cachedFrame && cachedFrame.expires > Date.now()) {
+        console.log(`[Frame Extract] Serving cached frame for ${dedupeKey}`);
+        return cachedFrame.data;
+    }
+    if (inFlightFrameExtractions.has(dedupeKey)) {
+        console.log(`[Frame Extract] Coalescing duplicate in-flight request for ${dedupeKey}`);
+        return inFlightFrameExtractions.get(dedupeKey);
+    }
+
+    const workPromise = (async () => {
+        const downloadsDir = path.join(__dirname, 'downloads');
+        if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+        const outExt = imgFormat === 'png' ? 'png' : 'jpg';
+        const outMime = imgFormat === 'png' ? 'image/png' : 'image/jpeg';
+        const ffmpegOutArgs = imgFormat === 'png'
+            ? ['-vframes', '1', '-f', 'image2', '-c:v', 'png', 'pipe:1']
+            : ['-vframes', '1', '-f', 'image2', '-c:v', 'mjpeg', '-q:v', '2', 'pipe:1'];
+        const aspectSafeScale = `scale='if(gte(iw/ih,16/9),1920,if(gte(iw/ih,1),-2,1080))':'if(gte(iw/ih,16/9),-2,if(gte(iw/ih,1),1080,1920))':flags=lanczos`;
+        const outFilename = `frame_${videoId}_${targetSeconds}s.${outExt}`;
+
+        const formatSeconds = (sec) => {
+            const s = Math.max(0, Math.floor(sec || 0));
+            const hrs = Math.floor(s / 3600);
+            const mins = Math.floor((s % 3600) / 60);
+            const secs = s % 60;
+            return [
+                String(hrs).padStart(2, '0'),
+                String(mins).padStart(2, '0'),
+                String(secs).padStart(2, '0')
+            ].join(':');
+        };
+        const tsFormatted = formatSeconds(targetSeconds);
+
+        let hitBotWall = false;
+        const cookiesPath = path.join(__dirname, 'cookies.txt');
+        const cookiesFlag = getCookiesFlag('https://www.youtube.com');
+        const hasCookies = Boolean(cookiesFlag && fs.existsSync(cookiesPath));
+
+        try {
+            let streamUrl = '';
+            const cachedStream = ytStreamCache.get(videoId);
+            if (cachedStream && cachedStream.expires > Date.now()) {
+                streamUrl = cachedStream.url;
+                console.log(`[Frame Extract] Using cached stream URL for ${videoId} at ${tsFormatted}...`);
+            } else {
+                console.log(`[Frame Extract] Attempting async direct stream extraction for ${videoId} at ${tsFormatted}...`);
+                const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+                const attempts = hasCookies
+                    ? [{ useCookies: true, clients: 'web_safari,mweb,web' }, { useCookies: false, clients: 'android' }]
+                    : [{ useCookies: false, clients: 'android' }];
+
+                for (const att of attempts) {
+                    try {
+                        const args = [
+                            ...(att.useCookies ? ['--cookies', cookiesPath] : []),
+                            '-g', '-f', '22/best[height<=720][acodec!=none]/18/best',
+                            '--force-ipv4', '--no-warnings', '--js-runtimes', 'node',
+                            '--extractor-args', `youtube:player_client=${att.clients}`,
+                            `https://www.youtube.com/watch?v=${videoId}`
+                        ];
+                        const { stdout } = await execFileAsync(ytdlpBin, args, { timeout: 12000, windowsHide: true });
+                        const matched = (stdout || '').trim().match(/https?:\/\/[^\r\n]+/);
+                        if (matched && matched[0]) {
+                            streamUrl = matched[0];
+                            ytStreamCache.set(videoId, { url: streamUrl, expires: Date.now() + 5 * 60 * 1000 });
+                            break;
+                        }
+                    } catch (attErr) {
+                        const msg = (attErr.stderr ? attErr.stderr.toString() : attErr.message) || '';
+                        if (msg.includes('not a bot') || msg.includes('cookies are no longer valid')) {
+                            hitBotWall = true;
+                        }
+                    }
+                }
+            }
+
+            if (streamUrl && streamUrl.startsWith('http')) {
+                console.log(`[Frame Extract] Extracting ${outExt.toUpperCase()} frame at ${tsFormatted}...`);
+                const ffArgs = [
+                    '-y', '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    '-ss', tsFormatted, '-i', streamUrl,
+                    '-vf', `${aspectSafeScale},unsharp=5:5:0.8:5:5:0.0`,
+                    ...ffmpegOutArgs
+                ];
+                const { stdout: frameBuf } = await execFileAsync('ffmpeg', ffArgs, { encoding: 'buffer', maxBuffer: 25 * 1024 * 1024, timeout: 15000, windowsHide: true });
+
+                if (frameBuf && frameBuf.length > 1000) {
+                    console.log(`[Frame Extract Success] Direct frame generated (${outExt.toUpperCase()}): ${frameBuf.length} bytes`);
+                    return {
+                        filename: outFilename,
+                        base64Url: `data:${outMime};base64,${frameBuf.toString('base64')}`,
+                        source: 'direct-stream',
+                        qualityLabel: `Direct Video Stream (${outExt.toUpperCase()})`,
+                        ext: outExt
+                    };
+                }
+            }
+        } catch (streamErr) {
+            ytStreamCache.delete(videoId);
+            console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
+        }
+
+        const sb = await getYouTubeStoryboard(videoId, { skipYtdlp: hitBotWall && !hasCookies });
+
+        let sheetUrl = '';
+        let cropX = 0;
+        let cropY = 0;
+        let cellW = 320;
+        let cellH = 180;
+
+        if (sb.type === 'fragments') {
+            cellW = sb.width || 320;
+            cellH = sb.height || 180;
+            let accumulated = 0;
+            let targetFrag = sb.fragments[0];
+
+            for (let i = 0; i < sb.fragments.length; i++) {
+                const f = sb.fragments[i];
+                if (accumulated + f.duration >= targetSeconds || i === sb.fragments.length - 1) {
+                    targetFrag = f;
+                    break;
+                }
+                accumulated += f.duration;
+            }
+
+            const timeInFrag = Math.max(0, targetSeconds - accumulated);
+            const framesPerSheet = sb.rows * sb.columns;
+            const frameDuration = targetFrag.duration / framesPerSheet;
+            const frameIndexInSheet = Math.min(Math.floor(timeInFrag / (frameDuration || 1)), framesPerSheet - 1);
+            const col = frameIndexInSheet % sb.columns;
+            const row = Math.floor(frameIndexInSheet / sb.columns);
+
+            cropX = col * cellW;
+            cropY = row * cellH;
+            sheetUrl = targetFrag.url;
+        } else {
+            cellW = sb.width || 320;
+            cellH = sb.height || 180;
+            const frameDurationSec = sb.interval > 0 ? (sb.interval / 1000) : 1.0;
+            const frameIndex = Math.min(Math.floor(targetSeconds / frameDurationSec), Math.max(0, sb.count - 1));
+            const framesPerSheet = sb.cols * sb.rows;
+            const sheetIndex = Math.floor(frameIndex / framesPerSheet);
+            const frameInSheet = frameIndex % framesPerSheet;
+            const col = frameInSheet % sb.cols;
+            const row = Math.floor(frameInSheet / sb.cols);
+
+            cropX = col * cellW;
+            cropY = row * cellH;
+
+            const sheetName = (sb.template || 'default').replace('$M', sheetIndex);
+            sheetUrl = sb.baseUrl.replace('$L', sb.levelIndex).replace('$N', sheetName);
+            if (sheetUrl.includes('$M')) sheetUrl = sheetUrl.replace('$M', sheetIndex);
+            if (sb.sigh) sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${sb.sigh}`;
+        }
+
+        const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}.tmp`);
+        try {
+            const sheetData = await new Promise((resolve, reject) => {
+                const req = https.get(sheetUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                    }
+                }, res => {
+                    if (res.statusCode !== 200) {
+                        return reject(new Error(`Storyboard CDN returned HTTP ${res.statusCode}`));
+                    }
+                    const chunks = [];
+                    res.on('data', c => chunks.push(c));
+                    res.on('end', () => {
+                        const buf = Buffer.concat(chunks);
+                        if (buf.length < 500) {
+                            return reject(new Error('Storyboard sheet download too small'));
+                        }
+                        const isWebp = buf.length > 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP';
+                        const isJpeg = buf.length > 2 && buf[0] === 0xFF && buf[1] === 0xD8;
+                        if (!isWebp && !isJpeg) {
+                            return reject(new Error(`Storyboard file is not a valid image format (received ${buf.slice(0, 16).toString()})`));
+                        }
+                        resolve({ buf, isWebp });
+                    });
+                });
+                req.on('error', reject);
+                req.setTimeout(10000, () => { req.destroy(); reject(new Error('Storyboard download timeout')); });
+            });
+
+            const sheetFile = `${tempSheet}${sheetData.isWebp ? '.webp' : '.jpg'}`;
+            fs.writeFileSync(sheetFile, sheetData.buf);
+
+            const ffArgs = ['-y', '-i', sheetFile, '-vf', `crop=${cellW}:${cellH}:${cropX}:${cropY},${aspectSafeScale}`, ...ffmpegOutArgs];
+            const { stdout: frameBuf } = await execFileAsync('ffmpeg', ffArgs, { encoding: 'buffer', maxBuffer: 25 * 1024 * 1024, timeout: 10000, windowsHide: true });
+
+            if (!frameBuf || frameBuf.length < 500) {
+                throw new Error('FFmpeg generated invalid or empty image buffer');
+            }
+
+            return {
+                filename: outFilename,
+                base64Url: `data:${outMime};base64,${frameBuf.toString('base64')}`,
+                source: 'storyboard',
+                qualityLabel: `Storyboard Frame (${cellW}x${cellH} -> Full HD ${outExt.toUpperCase()})`,
+                ext: outExt
+            };
+        } finally {
+            try {
+                const files = fs.readdirSync(downloadsDir);
+                for (const f of files) {
+                    if (f.startsWith(`temp_sb_${videoId}_`)) {
+                        try { fs.unlinkSync(path.join(downloadsDir, f)); } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
+    })();
+
+    inFlightFrameExtractions.set(dedupeKey, workPromise);
+    try {
+        const result = await workPromise;
+        if (result && result.base64Url) {
+            if (ytFrameResultCache.size >= 8) {
+                const oldestKey = ytFrameResultCache.keys().next().value;
+                ytFrameResultCache.delete(oldestKey);
+            }
+            ytFrameResultCache.set(dedupeKey, { data: result, expires: Date.now() + 2 * 60 * 1000 });
+        }
+        return result;
+    } finally {
+        inFlightFrameExtractions.delete(dedupeKey);
+    }
 }
 
 const server = http.createServer((req, res) => {
@@ -1197,395 +1661,6 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-function parseTimestampToSeconds(ts) {
-    if (!ts) return 0;
-    if (typeof ts === 'number') return Math.max(0, ts);
-    const str = String(ts).trim();
-    if (!str) return 0;
-    const parts = str.split(':').map(Number);
-    if (parts.some(isNaN)) return 0;
-    if (parts.length === 3) {
-        return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    } else if (parts.length === 2) {
-        return parts[0] * 60 + parts[1];
-    } else if (parts.length === 1) {
-        return parts[0];
-    }
-    return 0;
-}
-
-function fetchWithRedirects(targetUrl, headers = {}, maxRedirects = 5) {
-    return new Promise((resolve, reject) => {
-        if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
-
-        const client = targetUrl.startsWith('https') ? https : http;
-        client.get(targetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Cookie': 'CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; PREF=hl=en',
-                ...headers
-            }
-        }, res => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                let redirectUrl = res.headers.location;
-                if (!redirectUrl.startsWith('http')) {
-                    const u = new URL(targetUrl);
-                    redirectUrl = `${u.protocol}//${u.host}${redirectUrl}`;
-                }
-                return resolve(fetchWithRedirects(redirectUrl, headers, maxRedirects - 1));
-            }
-            let data = '';
-            res.on('data', c => data += c);
-            res.on('end', () => resolve({ statusCode: res.statusCode, body: data }));
-        }).on('error', reject);
-    });
-}
-
-const ytStoryboardCache = new Map();
-const ytCoverCache = new Map(); // videoId -> { url, qualityLabel, width, height, expires }
-const ytStreamCache = new Map(); // videoId -> { url, userAgent, expires }
-
-function extractYouTubeVideoId(rawUrl = '') {
-    const str = String(rawUrl || '').trim();
-    if (!str) return '';
-    // Handle /shorts/ID, /live/ID, /embed/ID, /v/ID, youtu.be/ID, and watch?...&v=ID
-    const pathMatch = str.match(/(?:youtube\.com\/(?:shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?&#\/]|$)/i);
-    if (pathMatch && pathMatch[1]) return pathMatch[1];
-    const queryMatch = str.match(/[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)/i);
-    if (queryMatch && queryMatch[1]) return queryMatch[1];
-    return '';
-}
-
-function checkImageExistsHead(imgUrl) {
-    return new Promise((resolve) => {
-        const req = https.request(imgUrl, { method: 'HEAD', timeout: 4000 }, res => {
-            resolve(res.statusCode >= 200 && res.statusCode < 300);
-        });
-        req.on('error', () => resolve(false));
-        req.on('timeout', () => { req.destroy(); resolve(false); });
-        req.end();
-    });
-}
-
-async function resolveBestYouTubeCover(videoId) {
-    const cached = ytCoverCache.get(videoId);
-    if (cached && cached.expires > Date.now()) return cached;
-
-    const candidates = [
-        { url: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`, qualityLabel: '1080p / 720p HD MaxRes', width: 1280, height: 720 },
-        { url: `https://img.youtube.com/vi/${videoId}/hq720.jpg`, qualityLabel: '720p HD Cover', width: 1280, height: 720 },
-        { url: `https://img.youtube.com/vi/${videoId}/sddefault.jpg`, qualityLabel: '480p SD Cover', width: 640, height: 480 },
-        { url: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`, qualityLabel: '360p HQ Fallback', width: 480, height: 360 }
-    ];
-
-    for (const c of candidates) {
-        const ok = await checkImageExistsHead(c.url);
-        if (ok) {
-            const entry = { ...c, expires: Date.now() + 15 * 60 * 1000 };
-            ytCoverCache.set(videoId, entry);
-            return entry;
-        }
-    }
-    return { ...candidates[3], expires: Date.now() + 60 * 1000 };
-}
-
-async function getYouTubeStoryboard(videoId) {
-    if (ytStoryboardCache.has(videoId)) {
-        return ytStoryboardCache.get(videoId);
-    }
-
-    let ytdlpErr = '';
-    // 1. Try yt-dlp using cookie-safe client routing
-    try {
-        const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-        const cookiesFlag = getCookiesFlag('https://www.youtube.com');
-        const clientArgs = getYtdlpClientArgs(Boolean(cookiesFlag));
-        const cmd = `${ytdlpBin}${cookiesFlag} --dump-json --skip-download --force-ipv4 --no-warnings${clientArgs} "https://www.youtube.com/watch?v=${videoId}"`;
-        const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-        const data = JSON.parse(out);
-        const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
-        if (storyboards && storyboards.length > 0) {
-            storyboards.sort((a, b) => (b.width || 0) - (a.width || 0));
-            const best = storyboards[0];
-            if (best && best.fragments && best.fragments.length > 0) {
-                const sbInfo = {
-                    type: 'fragments',
-                    width: best.width || 320,
-                    height: best.height || 180,
-                    rows: best.rows || 3,
-                    columns: best.columns || 3,
-                    fragments: best.fragments
-                };
-                ytStoryboardCache.set(videoId, sbInfo);
-                return sbInfo;
-            }
-        }
-    } catch (e) {
-        ytdlpErr = (e.stderr ? e.stderr.toString() : e.message).slice(0, 300);
-        console.warn(`[yt-dlp Storyboard Warning]: ${ytdlpErr}. Trying native https fallback...`);
-    }
-
-    // 2. Fallback: Parse watch page HTML (curl with -sL --compressed and fallback to fetchWithRedirects)
-    let html = '';
-    let fetchErr = '';
-    try {
-        const curlCmd = `curl -sL --compressed -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -b "CONSENT=PENDING+999; SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg" "https://www.youtube.com/watch?v=${videoId}"`;
-        html = execSync(curlCmd, { maxBuffer: 20 * 1024 * 1024, encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch (err) {
-        fetchErr = err.message;
-    }
-
-    if (!html || (!html.includes('"spec"') && !html.includes('\\"spec\\"'))) {
-        try {
-            const resp = await fetchWithRedirects(`https://www.youtube.com/watch?v=${videoId}`);
-            if (resp && resp.body) html = resp.body;
-        } catch (e) {
-            fetchErr += (fetchErr ? ' | ' : '') + e.message;
-        }
-    }
-
-    let specMatch = html.match(/"spec":\s*"([^"]+)"/);
-    if (!specMatch) {
-        const unescaped = html.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-        specMatch = unescaped.match(/"spec":\s*"([^"]+)"/);
-    }
-
-    if (!specMatch || !specMatch[1]) {
-        throw new Error(`Storyboard unavailable (ytdlp: ${ytdlpErr || 'none'}, fetch: ${fetchErr || 'no spec match'})`);
-    }
-
-    const rawSpec = specMatch[1];
-    const parts = rawSpec.split('|');
-    const baseUrl = parts[0];
-
-    let bestLevel = null;
-    let bestWidth = 0;
-
-    for (let i = 1; i < parts.length; i++) {
-        const segs = parts[i].split('#');
-        if (segs.length < 8) continue;
-        const width = parseInt(segs[0], 10);
-        const height = parseInt(segs[1], 10);
-        const count = parseInt(segs[2], 10);
-        const cols = parseInt(segs[3], 10);
-        const rows = parseInt(segs[4], 10);
-        const interval = parseInt(segs[5], 10);
-        const template = segs[6];
-        const sigh = segs[7];
-
-        if (width > bestWidth) {
-            bestWidth = width;
-            bestLevel = { width, height, count, cols, rows, interval, template, sigh, levelIndex: i - 1, baseUrl };
-        }
-    }
-
-    if (!bestLevel) throw new Error('Could not parse storyboard spec levels');
-    const sbInfo = { type: 'spec', ...bestLevel };
-    ytStoryboardCache.set(videoId, sbInfo);
-    return sbInfo;
-}
-
-async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jpg') {
-    const downloadsDir = path.join(__dirname, 'downloads');
-    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
-    const imgFormat = String(format || 'jpg').toLowerCase() === 'png' ? 'png' : 'jpg';
-    const outExt = imgFormat === 'png' ? 'png' : 'jpg';
-    const outMime = imgFormat === 'png' ? 'image/png' : 'image/jpeg';
-    const ffmpegOutArgs = imgFormat === 'png'
-        ? `-vframes 1 -f image2 -c:v png pipe:1`
-        : `-vframes 1 -f image2 -c:v mjpeg -q:v 2 pipe:1`;
-    // Preserve aspect ratio at Full HD (1920x1080 landscape, 1440x1080 4:3, 1080x1920 vertical Shorts)
-    const aspectSafeScale = `scale='if(gte(iw/ih,16/9),1920,if(gte(iw/ih,1),-2,1080))':'if(gte(iw/ih,16/9),-2,if(gte(iw/ih,1),1080,1920))':flags=lanczos`;
-    const outFilename = `frame_${videoId}_${targetSeconds}s.${outExt}`;
-
-    const formatSeconds = (sec) => {
-        const s = Math.max(0, Math.floor(sec || 0));
-        const hrs = Math.floor(s / 3600);
-        const mins = Math.floor((s % 3600) / 60);
-        const secs = s % 60;
-        return [
-            String(hrs).padStart(2, '0'),
-            String(mins).padStart(2, '0'),
-            String(secs).padStart(2, '0')
-        ].join(':');
-    };
-    const tsFormatted = formatSeconds(targetSeconds);
-
-    // METHOD 1: Direct stream URL extraction + FFmpeg pipe:1 (with 5-min URL cache for instant multi-frame scrubbing)
-    try {
-        let streamUrl = '';
-        const cachedStream = ytStreamCache.get(videoId);
-        if (cachedStream && cachedStream.expires > Date.now()) {
-            streamUrl = cachedStream.url;
-            console.log(`[Frame Extract] Using cached stream URL for ${videoId} at ${tsFormatted}...`);
-        } else {
-            console.log(`[Frame Extract] Attempting direct stream extraction for ${videoId} at ${tsFormatted}...`);
-            const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-            const cookiesFlag = getCookiesFlag('https://www.youtube.com');
-
-            // Android client ignores cookies; try cookieless android first, then cookie-compatible web clients if cookies exist
-            const attempts = [{ cFlag: '', clients: 'android' }];
-            if (cookiesFlag) attempts.push({ cFlag: cookiesFlag, clients: 'web_safari,web' });
-
-            for (const att of attempts) {
-                try {
-                    const streamCmd = `${ytdlpBin}${att.cFlag} -g -f "22/best[height<=720][acodec!=none]/18/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=${att.clients}" "https://www.youtube.com/watch?v=${videoId}"`;
-                    const streamUrlRaw = execSync(streamCmd, { encoding: 'utf8', timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-                    const matched = streamUrlRaw.match(/https?:\/\/[^\r\n]+/);
-                    if (matched && matched[0]) {
-                        streamUrl = matched[0];
-                        ytStreamCache.set(videoId, { url: streamUrl, expires: Date.now() + 5 * 60 * 1000 });
-                        break;
-                    }
-                } catch (attErr) {}
-            }
-        }
-
-        if (streamUrl && streamUrl.startsWith('http')) {
-            console.log(`[Frame Extract] Extracting exact ${outExt.toUpperCase()} frame at ${tsFormatted}...`);
-            const ffmpegCmd = `ffmpeg -y -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -ss ${tsFormatted} -i "${streamUrl}" -vf "${aspectSafeScale},unsharp=5:5:0.8:5:5:0.0" ${ffmpegOutArgs}`;
-            const frameBuf = execSync(ffmpegCmd, { maxBuffer: 25 * 1024 * 1024, timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] });
-
-            if (frameBuf && frameBuf.length > 1000) {
-                console.log(`[Frame Extract Success] Direct frame generated (${outExt.toUpperCase()}): ${frameBuf.length} bytes`);
-                return {
-                    filename: outFilename,
-                    base64Url: `data:${outMime};base64,${frameBuf.toString('base64')}`,
-                    source: 'direct-stream',
-                    qualityLabel: `Direct Video Stream (${outExt.toUpperCase()})`,
-                    ext: outExt
-                };
-            }
-        }
-    } catch (streamErr) {
-        // Evict cache entry in case signed URL expired
-        ytStreamCache.delete(videoId);
-        console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
-    }
-
-    // METHOD 2: Storyboard sheet extraction fallback
-    const sb = await getYouTubeStoryboard(videoId);
-
-    let sheetUrl = '';
-    let cropX = 0;
-    let cropY = 0;
-    let cellW = 320;
-    let cellH = 180;
-
-    if (sb.type === 'fragments') {
-        cellW = sb.width || 320;
-        cellH = sb.height || 180;
-        let accumulated = 0;
-        let targetFrag = sb.fragments[0];
-
-        for (let i = 0; i < sb.fragments.length; i++) {
-            const f = sb.fragments[i];
-            if (accumulated + f.duration >= targetSeconds || i === sb.fragments.length - 1) {
-                targetFrag = f;
-                break;
-            }
-            accumulated += f.duration;
-        }
-
-        const timeInFrag = Math.max(0, targetSeconds - accumulated);
-        const framesPerSheet = sb.rows * sb.columns;
-        const frameDuration = targetFrag.duration / framesPerSheet;
-        const frameIndexInSheet = Math.min(Math.floor(timeInFrag / (frameDuration || 1)), framesPerSheet - 1);
-        const col = frameIndexInSheet % sb.columns;
-        const row = Math.floor(frameIndexInSheet / sb.columns);
-
-        cropX = col * cellW;
-        cropY = row * cellH;
-        sheetUrl = targetFrag.url;
-    } else {
-        cellW = sb.width || 320;
-        cellH = sb.height || 180;
-        const frameDurationSec = sb.interval > 0 ? (sb.interval / 1000) : 1.0;
-        const frameIndex = Math.min(Math.floor(targetSeconds / frameDurationSec), Math.max(0, sb.count - 1));
-        const framesPerSheet = sb.cols * sb.rows;
-        const sheetIndex = Math.floor(frameIndex / framesPerSheet);
-        const frameInSheet = frameIndex % framesPerSheet;
-        const col = frameInSheet % sb.cols;
-        const row = Math.floor(frameInSheet / sb.cols);
-
-        cropX = col * cellW;
-        cropY = row * cellH;
-
-        const sheetName = (sb.template || 'default').replace('$M', sheetIndex);
-        sheetUrl = sb.baseUrl.replace('$L', sb.levelIndex).replace('$N', sheetName);
-        if (sheetUrl.includes('$M')) sheetUrl = sheetUrl.replace('$M', sheetIndex);
-        if (sb.sigh) sheetUrl += (sheetUrl.includes('?') ? '&' : '?') + `sigh=${sb.sigh}`;
-    }
-
-    try {
-        // Download storyboard sheet via native https (supports both WebP and JPEG)
-        const sheetData = await new Promise((resolve, reject) => {
-            const req = https.get(sheetUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-                }
-            }, res => {
-                if (res.statusCode !== 200) {
-                    return reject(new Error(`Storyboard CDN returned HTTP ${res.statusCode}`));
-                }
-                const chunks = [];
-                res.on('data', c => chunks.push(c));
-                res.on('end', () => {
-                    const buf = Buffer.concat(chunks);
-                    if (buf.length < 500) {
-                        return reject(new Error('Storyboard sheet download too small'));
-                    }
-                    const isWebp = buf.length > 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP';
-                    const isJpeg = buf.length > 2 && buf[0] === 0xFF && buf[1] === 0xD8;
-                    if (!isWebp && !isJpeg) {
-                        return reject(new Error(`Storyboard file is not a valid image format (received ${buf.slice(0, 16).toString()})`));
-                    }
-                    resolve({ buf, isWebp });
-                });
-            });
-            req.on('error', reject);
-            req.setTimeout(12000, () => { req.destroy(); reject(new Error('Storyboard download timeout')); });
-        });
-
-        const sheetExt = sheetData.isWebp ? '.webp' : '.jpg';
-        const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}${sheetExt}`);
-        fs.writeFileSync(tempSheet, sheetData.buf);
-
-        // Crop exact frame and upscale preserving source aspect ratio via FFmpeg pipe:1
-        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},${aspectSafeScale}" ${ffmpegOutArgs}`;
-        let frameBuf;
-        try {
-            frameBuf = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, windowsHide: true });
-        } catch (pipeErr) {
-            console.error(`[FFmpeg Crop Error]: ${pipeErr.message}`);
-            throw new Error(`FFmpeg crop failed: ${pipeErr.message}`);
-        }
-
-        if (!frameBuf || frameBuf.length < 500) {
-            throw new Error('FFmpeg generated invalid or empty image buffer');
-        }
-
-        return {
-            filename: outFilename,
-            base64Url: `data:${outMime};base64,${frameBuf.toString('base64')}`,
-            source: 'storyboard',
-            qualityLabel: `Storyboard Frame (${cellW}x${cellH} -> Full HD ${outExt.toUpperCase()})`,
-            ext: outExt
-        };
-    } finally {
-        try {
-            const files = fs.readdirSync(downloadsDir);
-            for (const f of files) {
-                if (f.startsWith(`temp_sb_${videoId}_`)) {
-                    try { fs.unlinkSync(path.join(downloadsDir, f)); } catch (e) {}
-                }
-            }
-        } catch (e) {}
-    }
-}
-
     // API Fast Thumbnail Fetching Endpoint (YouTube direct / storyboard, Twitch GQL, Kick API - No Python!)
     if ((pathname === '/api/extract-thumbnail' || pathname === '/api/fetch-thumbnail') && req.method === 'POST') {
         let body = '';
@@ -1636,13 +1711,18 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                             }
                         } catch (err) {
                             console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to best official cover.`);
+                            const isBotBlock = err.message.includes('bot') || err.message.includes('Skipped duplicate yt-dlp');
                             const bestCover = await resolveBestYouTubeCover(ytId);
+                            const friendlyMsg = isBotBlock
+                                ? `YouTube blocked this cloud IP ("Sign in to confirm you're not a bot"). Click Cookies (top right) to upload fresh cookies, then try again. Showing ${bestCover.qualityLabel}.`
+                                : `Timeline frame extraction error: ${err.message}. Loaded ${bestCover.qualityLabel}.`;
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             return res.end(JSON.stringify({
                                 success: true,
                                 platform: 'youtube',
                                 id: ytId,
                                 isFrame: false,
+                                botBlocked: isBotBlock,
                                 source: 'cover',
                                 qualityLabel: bestCover.qualityLabel,
                                 thumbnailUrl: bestCover.url,
@@ -1650,7 +1730,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                                 fallbackUrl: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
                                 timestamp: '00:00:00',
                                 filename: `${cleanTitle}_default_cover.jpg`,
-                                errorNotice: `Timeline frame extraction error: ${err.message}. Loaded ${bestCover.qualityLabel}.`
+                                errorNotice: friendlyMsg
                             }));
                         }
                     }
