@@ -57,11 +57,51 @@ function getCookiesFlag(url = '') {
     return '';
 }
 
+function getYtdlpClientArgs(hasCookies = false) {
+    // android/ios do not support cookies in yt-dlp; use cookie-compatible clients when cookies are present
+    const clients = hasCookies ? 'web_safari,mweb,web,tv' : 'android,ios,web_creator,tv';
+    return ` --extractor-args "youtube:player_client=${clients}"`;
+}
+
+function injectYtdlpFlags(command, { cookiesFlag = '', isYT = false, isKick = false } = {}) {
+    let out = command;
+    const prefixFlags = [];
+
+    if (!out.includes('--impersonate') && isKick) {
+        prefixFlags.push('--impersonate Chrome');
+    }
+    if (!out.includes('--js-runtimes')) {
+        prefixFlags.push('--js-runtimes node');
+    }
+    if (cookiesFlag && !out.includes('--cookies')) {
+        prefixFlags.push(cookiesFlag.trim());
+    }
+    if (isYT) {
+        if (!out.includes('--force-ipv4')) {
+            prefixFlags.push('--force-ipv4');
+        }
+        if (!out.includes('--user-agent')) {
+            prefixFlags.push('--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"');
+        }
+        if (!out.includes('--concurrent-fragments')) {
+            prefixFlags.push('--concurrent-fragments 5');
+        }
+        if (!out.includes('--extractor-args')) {
+            prefixFlags.push(getYtdlpClientArgs(Boolean(cookiesFlag && !out.includes('--cookies')) || out.includes('--cookies')).trim());
+        }
+    }
+
+    if (prefixFlags.length === 0) return out;
+    const joined = prefixFlags.join(' ');
+    // Replace only yt-dlp command invocations (not matches inside video titles)
+    return out.replace(/(^|(?:&&|\|\||;)\s*)yt-dlp\b/g, `$1yt-dlp ${joined}`);
+}
+
 function getBaseYtdlpCmd(url = '') {
     const cookiesFlag = getCookiesFlag(url);
     const impersonateFlag = (url && url.toLowerCase().includes('kick.com')) ? ' --impersonate Chrome' : '';
     const isYouTube = url && (url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be'));
-    const clientOverride = isYouTube ? ' --extractor-args "youtube:player_client=ios,android,web_embedded"' : '';
+    const clientOverride = isYouTube ? getYtdlpClientArgs(Boolean(cookiesFlag)) : '';
     const ytArgs = isYouTube ? ` --force-ipv4 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"${clientOverride} --concurrent-fragments 5` : '';
     if (cookiesFlag) {
         return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
@@ -648,14 +688,15 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Direct Clip Preview (High-Performance HTML5 MP4 Stream URL)
+    // API Direct Clip / VOD Preview (HTML5 MP4 / HLS Stream URL for Twitch Clips & Kick VODs/Clips)
     if (pathname === '/api/clip-preview' && req.method === 'GET') {
         const slug = (parsedUrl.searchParams.get('slug') || '').trim();
+        const vodId = (parsedUrl.searchParams.get('vodId') || '').trim();
         const platform = (parsedUrl.searchParams.get('platform') || 'twitch').toLowerCase();
 
-        if (!slug) {
+        if (!slug && !vodId) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: 'Slug parameter is required' }));
+            return res.end(JSON.stringify({ success: false, error: 'Slug or vodId parameter is required' }));
         }
 
         if (platform === 'twitch') {
@@ -666,6 +707,36 @@ const server = http.createServer((req, res) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: err.message }));
             });
+            return;
+        }
+
+        if (platform === 'kick') {
+            (async () => {
+                try {
+                    if (vodId) {
+                        const data = await fetchKickJson(`https://kick.com/api/v1/video/${encodeURIComponent(vodId)}`);
+                        const previewUrl = data?.source || data?.livestream?.source || '';
+                        if (previewUrl) {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            return res.end(JSON.stringify({ success: true, platform, vodId, previewUrl, title: data?.livestream?.session_title || data?.session_title || '' }));
+                        }
+                    }
+                    if (slug) {
+                        const data = await fetchKickJson(`https://kick.com/api/v2/clips/${encodeURIComponent(slug)}`);
+                        const clipObj = data?.clip || data;
+                        const previewUrl = clipObj?.clip_url || clipObj?.video_url || '';
+                        if (previewUrl) {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            return res.end(JSON.stringify({ success: true, platform, slug, previewUrl, title: clipObj?.title || '' }));
+                        }
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Kick stream source not found' }));
+                } catch (err) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: err.message }));
+                }
+            })();
             return;
         }
 
@@ -680,39 +751,37 @@ const server = http.createServer((req, res) => {
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', () => {
             try {
-                const { command } = JSON.parse(body);
+                const { command, tabId, cropMode } = JSON.parse(body);
                 if (!command) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ error: 'Command required' }));
                 }
 
-                let finalCommand = command;
-                if (finalCommand.includes('yt-dlp')) {
-                    const isYT = finalCommand.toLowerCase().includes('youtube.com') || finalCommand.toLowerCase().includes('youtu.be');
-                    if (!finalCommand.includes('--impersonate') && finalCommand.toLowerCase().includes('kick.com')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --impersonate Chrome');
+                const singleFileTabs = new Set(['tab-quick-download', 'tab-section-clipper', 'tab-silence-cutter', 'tab-file-converter']);
+                const isolateJob = singleFileTabs.has(tabId) || (!tabId && !command.includes('robocopy') && !command.includes('/shorts') && !command.includes('/yt-sections'));
+                let jobDir = null;
+                let baseCommand = command;
+
+                if (isolateJob) {
+                    const jobId = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+                    jobDir = path.join(DOWNLOADS_DIR, `.job_${jobId}`);
+                    if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
+                    // Redirect relative downloads/ output targets into this job's isolated directory (preserving ffmpeg -i input paths)
+                    baseCommand = baseCommand
+                        .replace(/(-o|--output)\s+"downloads[\/\\]/gi, `$1 "downloads/.job_${jobId}/`)
+                        .replace(/auto-editor\s+"downloads[\/\\]/gi, `auto-editor "downloads/.job_${jobId}/`);
+                    if (baseCommand.trimStart().startsWith('ffmpeg')) {
+                        baseCommand = baseCommand.replace(/(?<!-i\s+)"downloads[\/\\]/gi, `"downloads/.job_${jobId}/`);
                     }
-                    if (!finalCommand.includes('--js-runtimes')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --js-runtimes node');
-                    }
-                    const cookiesFlag = getCookiesFlag(finalCommand);
-                    if (cookiesFlag && !finalCommand.includes('--cookies')) {
-                        finalCommand = finalCommand.replace(/\byt-dlp\b/g, `yt-dlp${cookiesFlag}`);
-                    }
-                    if (isYT) {
-                        if (!finalCommand.includes('--force-ipv4')) {
-                            finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --force-ipv4');
-                        }
-                        if (!finalCommand.includes('--user-agent')) {
-                            finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"');
-                        }
-                        if (!finalCommand.includes('--concurrent-fragments')) {
-                            finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --concurrent-fragments 5');
-                        }
-                        if (!finalCommand.includes('--extractor-args')) {
-                            finalCommand = finalCommand.replace(/\byt-dlp\b/g, 'yt-dlp --extractor-args "youtube:player_client=ios,android,web_embedded"');
-                        }
-                    }
+                }
+
+                const cookiesFlag = getCookiesFlag(baseCommand);
+                const isYT = baseCommand.toLowerCase().includes('youtube.com') || baseCommand.toLowerCase().includes('youtu.be');
+                const isKick = baseCommand.toLowerCase().includes('kick.com');
+
+                let finalCommand = baseCommand;
+                if (/\byt-dlp\b/.test(finalCommand)) {
+                    finalCommand = injectYtdlpFlags(finalCommand, { cookiesFlag, isYT, isKick });
                 }
 
                 // Parse target section duration for accurate live percentage calculation on long clips
@@ -742,7 +811,6 @@ const server = http.createServer((req, res) => {
                     'X-Accel-Buffering': 'no'
                 });
 
-                // Send immediate feedback so user sees activity instantly
                 res.write(JSON.stringify({
                     text: '[Download Initiated] Connecting to stream & buffering media segments...',
                     type: 'system',
@@ -751,145 +819,284 @@ const server = http.createServer((req, res) => {
                     eta: '--'
                 }) + '\n');
 
-                const child = exec(finalCommand, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
-
-                let hasInvalidCookies = false;
-
-                const handleOutput = (data, defaultType = 'info') => {
-                    const text = data.toString();
-                    if (text.includes('cookies are no longer valid')) {
-                        hasInvalidCookies = true;
+                let clientAborted = false;
+                let activeChild = null;
+                res.on('close', () => {
+                    if (!res.writableFinished) {
+                        clientAborted = true;
+                        if (activeChild && !activeChild.killed) {
+                            try { activeChild.kill('SIGTERM'); } catch (e) {}
+                        }
                     }
-                    const lines = text.split(/[\r\n]+/);
-                    
-                    lines.forEach(line => {
-                        const trimmed = line.trim();
-                        if (!trimmed) return;
+                });
 
-                        // Filter out repetitive HLS manifest skip spam (can be 2,000+ lines on long VODs)
-                        if (trimmed.startsWith('[hls @') && (trimmed.includes('Skip') || trimmed.includes('#EXT-X-'))) {
+                const cleanupJobDir = () => {
+                    if (jobDir && fs.existsSync(jobDir)) {
+                        try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch (e) {}
+                    }
+                };
+
+                const runExecAttempt = (cmdToRun, { allowCookieRetry = false } = {}) => {
+                    const child = exec(cmdToRun, { maxBuffer: 1024 * 1024 * 50, windowsHide: true });
+                    activeChild = child;
+
+                    let hasInvalidCookies = false;
+                    let sawBotOrFormatError = false;
+                    let currentPhase = 'video';
+
+                    const handleOutput = (data, defaultType = 'info') => {
+                        if (clientAborted || res.writableEnded) return;
+                        const text = data.toString();
+                        if (text.includes('cookies are no longer valid')) {
+                            hasInvalidCookies = true;
+                        }
+                        if (text.includes('Sign in to confirm you') || text.includes('not a bot') || text.includes('Requested format is not available')) {
+                            sawBotOrFormatError = true;
+                        }
+                        const lines = text.split(/[\r\n]+/);
+
+                        lines.forEach(line => {
+                            const trimmed = line.trim();
+                            if (!trimmed) return;
+
+                            if (trimmed.startsWith('[hls @') && (trimmed.includes('Skip') || trimmed.includes('#EXT-X-'))) {
+                                return;
+                            }
+
+                            let percentMatch = trimmed.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
+                            let speedMatch = trimmed.match(/at\s+([0-9\.]+\s*[KMGk]?i?B\/s)/i) || trimmed.match(/speed=\s*([0-9\.]+\s*x)/i);
+                            let etaMatch = trimmed.match(/ETA\s+([0-9:]+)/i);
+
+                            if (trimmed.includes('[download] Destination:')) {
+                                if (/\.(m4a|webm|opus|mp3|aac)$/i.test(trimmed) || trimmed.includes('.f140') || trimmed.includes('.f251')) {
+                                    currentPhase = 'audio';
+                                }
+                            } else if (trimmed.includes('[Merger]') || trimmed.includes('[Fixup')) {
+                                percentMatch = [null, '99.0'];
+                                speedMatch = speedMatch || [null, 'Merging MP4...'];
+                            } else if (trimmed.includes('[ExtractAudio]')) {
+                                percentMatch = [null, '98.5'];
+                                speedMatch = speedMatch || [null, 'Extracting Audio...'];
+                            }
+
+                            if (trimmed.includes('time=') && (trimmed.includes('frame=') || trimmed.includes('size='))) {
+                                const timeMatch = trimmed.match(/time=\s*([0-9:]+(?:\.[0-9]+)?)/i);
+                                const ffmpegSpeedMatch = trimmed.match(/speed=\s*([0-9\.]+)x/i);
+
+                                if (timeMatch) {
+                                    const parseTimeToSec = (tStr) => {
+                                        const parts = (tStr || '').trim().split(':').map(Number);
+                                        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+                                        if (parts.length === 2) return parts[0] * 60 + parts[1];
+                                        return parseFloat(tStr) || 0;
+                                    };
+                                    const curSec = parseTimeToSec(timeMatch[1]);
+                                    if (sectionDurationSec > 0) {
+                                        const calcPercent = Math.min(99.5, Math.max(0.1, (curSec / sectionDurationSec) * 100));
+                                        percentMatch = [null, calcPercent.toFixed(1)];
+
+                                        if (ffmpegSpeedMatch) {
+                                            const speedMultiplier = parseFloat(ffmpegSpeedMatch[1]) || 1;
+                                            speedMatch = [null, `${ffmpegSpeedMatch[1]}x`];
+                                            if (speedMultiplier > 0) {
+                                                const remainingSec = Math.max(0, sectionDurationSec - curSec);
+                                                const etaSeconds = Math.round(remainingSec / speedMultiplier);
+                                                const m = Math.floor(etaSeconds / 60).toString().padStart(2, '0');
+                                                const s = (etaSeconds % 60).toString().padStart(2, '0');
+                                                etaMatch = [null, `${m}:${s}`];
+                                            }
+                                        }
+                                    } else {
+                                        percentMatch = [null, Math.min(99, Math.floor(curSec)).toString()];
+                                    }
+                                }
+                            }
+
+                            let logType = defaultType;
+                            if (trimmed.includes('[Ready]') || trimmed.includes('100%')) logType = 'success';
+                            else if (trimmed.includes('[Error]') || trimmed.includes('ERROR:')) logType = 'error';
+
+                            let mappedPercent = percentMatch ? parseFloat(percentMatch[1]) : null;
+                            if (mappedPercent !== null && currentPhase === 'audio' && trimmed.startsWith('[download]')) {
+                                // Smooth transition for second audio stream: map 0-100% -> 88-98%
+                                mappedPercent = parseFloat((88 + mappedPercent * 0.1).toFixed(1));
+                            }
+
+                            const payload = {
+                                text: trimmed,
+                                type: logType,
+                                percent: mappedPercent,
+                                speed: speedMatch ? speedMatch[1] : null,
+                                eta: etaMatch ? etaMatch[1] : null
+                            };
+
+                            res.write(JSON.stringify(payload) + '\n');
+                        });
+                    };
+
+                    if (child.stdout) child.stdout.on('data', d => handleOutput(d, 'info'));
+                    if (child.stderr) child.stderr.on('data', d => handleOutput(d, 'system'));
+
+                    child.on('close', (code) => {
+                        if (clientAborted || res.writableEnded) {
+                            cleanupJobDir();
                             return;
                         }
 
-                        let percentMatch = trimmed.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
-                        let speedMatch = trimmed.match(/at\s+([0-9\.]+\s*[KMGk]?i?B\/s)/i) || trimmed.match(/speed=\s*([0-9\.]+\s*x)/i);
-                        let etaMatch = trimmed.match(/ETA\s+([0-9:]+)/i);
+                        if (hasInvalidCookies) {
+                            try {
+                                const cookiesPath = path.join(__dirname, 'cookies.txt');
+                                if (fs.existsSync(cookiesPath)) {
+                                    fs.unlinkSync(cookiesPath);
+                                    console.log('[Cookies] Auto-deleted expired cookies.txt file.');
+                                }
+                            } catch (e) {}
+                        }
 
-                        // If downloading section via ffmpeg (Twitch/Kick HLS chunk downloader)
-                        // ffmpeg outputs: frame=  525 fps=340 q=-1.0 size= 6656KiB time=00:00:02.49 bitrate=... speed=1.62x
-                        if (trimmed.includes('time=') && (trimmed.includes('frame=') || trimmed.includes('size='))) {
-                            const timeMatch = trimmed.match(/time=\s*([0-9:]+(?:\.[0-9]+)?)/i);
-                            const ffmpegSpeedMatch = trimmed.match(/speed=\s*([0-9\.]+)x/i);
+                        // Auto-retry once without cookies (using android/ios client) if cookie-authenticated YT attempt hit bot/cookie rejection
+                        if (code !== 0 && allowCookieRetry && isYT && cmdToRun.includes('--cookies') && (hasInvalidCookies || sawBotOrFormatError)) {
+                            cleanupJobDir();
+                            if (jobDir && !fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
+                            const cookielessCmd = injectYtdlpFlags(baseCommand, { cookiesFlag: '', isYT, isKick });
+                            res.write(JSON.stringify({
+                                text: '[Anti-Bot Auto-Retry] Cookies expired or rejected by YouTube client. Retrying cleanly with cookieless Android/iOS client...',
+                                type: 'system',
+                                percent: 1,
+                                speed: 'Retrying...',
+                                eta: '--'
+                            }) + '\n');
+                            return runExecAttempt(cookielessCmd, { allowCookieRetry: false });
+                        }
 
-                            if (timeMatch) {
-                                const parseTimeToSec = (tStr) => {
-                                    const parts = (tStr || '').trim().split(':').map(Number);
-                                    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-                                    if (parts.length === 2) return parts[0] * 60 + parts[1];
-                                    return parseFloat(tStr) || 0;
-                                };
-                                const curSec = parseTimeToSec(timeMatch[1]);
-                                if (sectionDurationSec > 0) {
-                                    const calcPercent = Math.min(99.9, Math.max(0.1, (curSec / sectionDurationSec) * 100));
-                                    percentMatch = [null, calcPercent.toFixed(1)];
+                        const scanDirRecursive = (dir, minMtimeMs = 0) => {
+                            const found = [];
+                            if (!fs.existsSync(dir)) return found;
+                            const entries = fs.readdirSync(dir, { withFileTypes: true });
+                            for (const e of entries) {
+                                const full = path.join(dir, e.name);
+                                if (e.isDirectory()) {
+                                    // Skip internal job directories unless explicitly scanning a jobDir
+                                    if (!jobDir && e.name.startsWith('.job_')) continue;
+                                    found.push(...scanDirRecursive(full, minMtimeMs));
+                                } else {
+                                    if (e.name.endsWith('.part') || e.name.endsWith('.ytdl') || e.name.endsWith('.temp') || e.name.startsWith('temp_sb_')) continue;
+                                    const stat = fs.statSync(full);
+                                    if (stat.size > 0 && stat.mtimeMs >= minMtimeMs) {
+                                        found.push({ p: full, t: stat.mtimeMs, s: stat.size });
+                                    }
+                                }
+                            }
+                            return found;
+                        };
 
-                                    if (ffmpegSpeedMatch) {
-                                        const speedMultiplier = parseFloat(ffmpegSpeedMatch[1]) || 1;
-                                        speedMatch = [null, `${ffmpegSpeedMatch[1]}x`];
-                                        if (speedMultiplier > 0) {
-                                            const remainingSec = Math.max(0, sectionDurationSec - curSec);
-                                            const etaSeconds = Math.round(remainingSec / speedMultiplier);
-                                            const m = Math.floor(etaSeconds / 60).toString().padStart(2, '0');
-                                            const s = (etaSeconds % 60).toString().padStart(2, '0');
-                                            etaMatch = [null, `${m}:${s}`];
+                        const finishResponse = (finalCode) => {
+                            let outputFile = null;
+                            if (finalCode === 0) {
+                                try {
+                                    const searchRoot = jobDir || path.join(__dirname, 'downloads');
+                                    const minTime = jobDir ? 0 : (Date.now() - 120000);
+                                    const allFiles = scanDirRecursive(searchRoot, minTime);
+                                    if (allFiles.length > 0) {
+                                        allFiles.sort((a, b) => b.t - a.t || b.s - a.s);
+                                        outputFile = path.relative(__dirname, allFiles[0].p).replace(/\\/g, '/');
+                                    }
+                                } catch (e) {}
+                            }
+
+                            let downloadToken = null;
+                            let fileName = null;
+                            if (finalCode === 0 && outputFile) {
+                                const absFilePath = path.join(__dirname, outputFile);
+                                console.log(`[Server] Output file: ${absFilePath}, exists: ${fs.existsSync(absFilePath)}`);
+                                if (fs.existsSync(absFilePath)) {
+                                    downloadToken = crypto.randomBytes(16).toString('hex');
+                                    fileName = path.basename(absFilePath);
+                                    downloadTokens.set(downloadToken, { absPath: absFilePath, jobDir, expires: Date.now() + 600000 });
+                                    console.log(`[Server] Token created: ${downloadToken} for file: ${fileName}`);
+                                    for (const [k, v] of downloadTokens) {
+                                        if (v.expires < Date.now()) {
+                                            if (v.jobDir) {
+                                                try { fs.rmSync(v.jobDir, { recursive: true, force: true }); } catch (e) {}
+                                            }
+                                            downloadTokens.delete(k);
                                         }
                                     }
-                                } else {
-                                    percentMatch = [null, Math.min(99, Math.floor(curSec)).toString()];
                                 }
+                            } else if (finalCode !== 0 || !outputFile) {
+                                cleanupJobDir();
+                            }
+
+                            res.write(JSON.stringify({ done: true, exitCode: finalCode, outputFile, downloadToken, fileName }) + '\n');
+                            res.end();
+                        };
+
+                        // Optional Step 2: 9:16 Vertical Framing / Crop for TikTok / Shorts / Reels
+                        const needsVerticalCrop = code === 0 && (cropMode === 'vertical_crop' || cropMode === 'vertical_blur') && jobDir;
+                        if (needsVerticalCrop) {
+                            const jobFiles = scanDirRecursive(jobDir, 0).filter(f => /\.(mp4|mkv|webm|mov)$/i.test(f.p));
+                            if (jobFiles.length > 0) {
+                                jobFiles.sort((a, b) => b.s - a.s);
+                                const rawFile = jobFiles[0].p;
+                                const parsedRaw = path.parse(rawFile);
+                                const finalBaseName = parsedRaw.name.endsWith('_9x16') ? parsedRaw.name : `${parsedRaw.name}_9x16`;
+                                const tempCroppedFile = path.join(parsedRaw.dir, `.tmp_9x16_${parsedRaw.name}.mp4`);
+                                const finalCroppedFile = path.join(parsedRaw.dir, `${finalBaseName}.mp4`);
+                                const vfFilter = cropMode === 'vertical_blur'
+                                    ? `-filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase:flags=bilinear,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,boxblur=25:2[bg];[0:v]scale=1080:-2:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"`
+                                    : `-vf "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,setsar=1"`;
+                                const ffmpegCropCmd = `ffmpeg -y -i "${rawFile}" ${vfFilter} -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempCroppedFile}"`;
+
+                                res.write(JSON.stringify({
+                                    text: `[Vertical 9:16 Render] Formatting clip (${cropMode === 'vertical_blur' ? '9:16 Blurred Backdrop' : '9:16 Center Crop'})...`,
+                                    type: 'system',
+                                    percent: 90,
+                                    speed: 'FFmpeg 9:16',
+                                    eta: 'Rendering...'
+                                }) + '\n');
+
+                                const cropChild = exec(ffmpegCropCmd, { maxBuffer: 1024 * 1024 * 25, windowsHide: true });
+                                activeChild = cropChild;
+                                if (cropChild.stderr) {
+                                    cropChild.stderr.on('data', d => {
+                                        if (clientAborted || res.writableEnded) return;
+                                        const t = d.toString();
+                                        const m = t.match(/time=\s*([0-9:]+(?:\.[0-9]+)?)/i);
+                                        if (m && sectionDurationSec > 0) {
+                                            const parts = m[1].split(':').map(Number);
+                                            const sec = parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : (parts.length === 2 ? parts[0] * 60 + parts[1] : parseFloat(m[1]) || 0);
+                                            const pct = Math.min(99.5, 90 + (sec / sectionDurationSec) * 9.5);
+                                            res.write(JSON.stringify({ percent: parseFloat(pct.toFixed(1)), speed: 'FFmpeg 9:16', eta: 'Encoding' }) + '\n');
+                                        }
+                                    });
+                                }
+                                cropChild.on('close', (cropCode) => {
+                                    if (cropCode === 0 && fs.existsSync(tempCroppedFile)) {
+                                        try { fs.unlinkSync(rawFile); } catch (e) {}
+                                        try { fs.renameSync(tempCroppedFile, finalCroppedFile); } catch (e) {}
+                                        res.write(JSON.stringify({ text: '[Vertical 9:16 Render] Ready for Shorts / TikTok / Reels!', type: 'success', percent: 100 }) + '\n');
+                                        return finishResponse(0);
+                                    }
+                                    try { if (fs.existsSync(tempCroppedFile)) fs.unlinkSync(tempCroppedFile); } catch (e) {}
+                                    res.write(JSON.stringify({ text: '[Vertical 9:16 Warning] Crop encode failed; falling back to original cut.', type: 'system' }) + '\n');
+                                    finishResponse(0);
+                                });
+                                return;
                             }
                         }
 
-                        let logType = defaultType;
-                        if (trimmed.includes('[Ready]') || trimmed.includes('100%')) logType = 'success';
-                        else if (trimmed.includes('[Error]') || trimmed.includes('ERROR:')) logType = 'error';
+                        finishResponse(code);
+                    });
 
-                        const payload = {
-                            text: trimmed,
-                            type: logType,
-                            percent: percentMatch ? parseFloat(percentMatch[1]) : null,
-                            speed: speedMatch ? speedMatch[1] : null,
-                            eta: etaMatch ? etaMatch[1] : null
-                        };
-
-                        res.write(JSON.stringify(payload) + '\n');
+                    child.on('error', (err) => {
+                        cleanupJobDir();
+                        if (!res.writableEnded) {
+                            res.write(JSON.stringify({ text: `Execution Error: ${err.message}`, type: 'error', done: true }) + '\n');
+                            res.end();
+                        }
                     });
                 };
 
-                if (child.stdout) child.stdout.on('data', d => handleOutput(d, 'info'));
-                if (child.stderr) child.stderr.on('data', d => handleOutput(d, 'system'));
-
-                child.on('close', (code) => {
-                    if (hasInvalidCookies) {
-                        try {
-                            const cookiesPath = path.join(__dirname, 'cookies.txt');
-                            if (fs.existsSync(cookiesPath)) {
-                                fs.unlinkSync(cookiesPath);
-                                console.log('[Cookies] Auto-deleted expired cookies.txt file.');
-                            }
-                        } catch (e) {}
-                    }
-                    // Detect the output file that was written to downloads/
-                    let outputFile = null;
-                    if (code === 0) {
-                        try {
-                            const downloadsDir = path.join(__dirname, 'downloads');
-                            const allFiles = [];
-                            function scanDir(dir) {
-                                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                                entries.forEach(e => {
-                                    const full = path.join(dir, e.name);
-                                    if (e.isDirectory()) scanDir(full);
-                                    else {
-                                        const stat = fs.statSync(full);
-                                        if (stat.mtimeMs > Date.now() - 120000) { // modified in last 2 minutes
-                                            allFiles.push({ p: full, t: stat.mtimeMs });
-                                        }
-                                    }
-                                });
-                            }
-                            if (fs.existsSync(downloadsDir)) scanDir(downloadsDir);
-                            if (allFiles.length > 0) {
-                                allFiles.sort((a, b) => b.t - a.t);
-                                outputFile = allFiles[0].p.replace(__dirname + path.sep, '').replace(/\\/g, '/');
-                            }
-                        } catch (e) {}
-                    }
-                    // Combine done + token into a SINGLE packet to avoid client missing it
-                    let downloadToken = null;
-                    let fileName = null;
-                    if (code === 0 && outputFile) {
-                        const absFilePath = path.join(__dirname, outputFile);
-                        console.log(`[Server] Output file: ${absFilePath}, exists: ${fs.existsSync(absFilePath)}`);
-                        if (fs.existsSync(absFilePath)) {
-                            downloadToken = crypto.randomBytes(16).toString('hex');
-                            fileName = path.basename(absFilePath);
-                            downloadTokens.set(downloadToken, { absPath: absFilePath, expires: Date.now() + 300000 });
-                            console.log(`[Server] Token created: ${downloadToken} for file: ${fileName}`);
-                            // Clean up expired tokens
-                            for (const [k, v] of downloadTokens) {
-                                if (v.expires < Date.now()) downloadTokens.delete(k);
-                            }
-                        }
-                    }
-                    res.write(JSON.stringify({ done: true, exitCode: code, outputFile, downloadToken, fileName }) + '\n');
-                    res.end();
-                });
-
-                child.on('error', (err) => {
-                    res.write(JSON.stringify({ text: `Execution Error: ${err.message}`, type: 'error', done: true }) + '\n');
-                    res.end();
-                });
+                runExecAttempt(finalCommand, { allowCookieRetry: true });
 
             } catch (err) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -916,6 +1123,7 @@ const server = http.createServer((req, res) => {
             return res.end('Token not found or expired');
         }
         const absPath = entry.absPath;
+        const entryJobDir = entry.jobDir;
         console.log(`[DownloadFile] Serving: ${absPath}`);
         if (!absPath.startsWith(path.join(__dirname, 'downloads'))) {
             res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -923,6 +1131,7 @@ const server = http.createServer((req, res) => {
         }
         if (!fs.existsSync(absPath)) {
             downloadTokens.delete(token);
+            if (entryJobDir) try { fs.rmSync(entryJobDir, { recursive: true, force: true }); } catch (e) {}
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             return res.end('File not found on disk');
         }
@@ -939,12 +1148,22 @@ const server = http.createServer((req, res) => {
         });
         const stream = fs.createReadStream(absPath);
         stream.pipe(res);
-        // Delete file from Render disk after fully sent
-        stream.on('end', () => {
-            fs.unlink(absPath, (err) => {
-                if (!err) console.log(`[Server] Deleted from disk: ${path.basename(absPath)}`);
-                else console.log(`[Server] Delete failed: ${err.message}`);
-            });
+        // Delete file and isolated job directory from disk after transfer completes
+        const cleanupAfterServe = () => {
+            if (entryJobDir && fs.existsSync(entryJobDir)) {
+                fs.rm(entryJobDir, { recursive: true, force: true }, (err) => {
+                    if (!err) console.log(`[Server] Cleaned job folder: ${path.basename(entryJobDir)}`);
+                });
+            } else {
+                fs.unlink(absPath, (err) => {
+                    if (!err) console.log(`[Server] Deleted from disk: ${path.basename(absPath)}`);
+                    else console.log(`[Server] Delete failed: ${err.message}`);
+                });
+            }
+        };
+        stream.on('end', cleanupAfterServe);
+        res.on('close', () => {
+            if (!res.writableFinished) stream.destroy();
         });
         return;
     }
@@ -1172,6 +1391,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
             if (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 1000) {
                 console.log(`[Frame Extract Success] Exact direct frame generated: ${fs.statSync(outFilePath).size} bytes`);
                 const base64Data = fs.readFileSync(outFilePath).toString('base64');
+                try { fs.unlinkSync(outFilePath); } catch (e) {}
                 return {
                     filename: outFilename,
                     base64Url: `data:image/jpeg;base64,${base64Data}`,
@@ -1299,6 +1519,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         };
     } finally {
         try {
+            if (fs.existsSync(outFilePath)) fs.unlinkSync(outFilePath);
             const files = fs.readdirSync(downloadsDir);
             for (const f of files) {
                 if (f.startsWith(`temp_sb_${videoId}_`)) {

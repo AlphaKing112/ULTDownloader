@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.4">
+    <link rel="stylesheet" href="style.css?v=3.5">
 </head>
 <body>
     <div class="app-container">
@@ -138,7 +138,7 @@
                                 <input type="url" id="quick-url" placeholder="https://www.youtube.com/watch?v=... or TikTok URL" required>
                                 <button type="button" class="btn-paste" onclick="pasteClipboard('quick-url')"><i class="fa-regular fa-clipboard"></i></button>
                             </div>
-                            <div id="yt-antibot-badge" class="platform-detect-indicator" style="margin-top: 10px; font-size: 0.82rem; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.06);"><i class="fa-solid fa-shield-halved" style="color: #ef4444;"></i> <strong>Anti-Bot YouTube Engine Active:</strong> Client rotation (`android, ios, web_creator, mweb`) & 5x fragment acceleration enabled.</div>
+                            <div id="yt-antibot-badge" class="platform-detect-indicator" style="margin-top: 10px; font-size: 0.82rem; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.06);"><i class="fa-solid fa-shield-halved" style="color: #ef4444;"></i> <strong>Anti-Bot YouTube Engine Active:</strong> Auto client switching, cookie support &amp; 5x fragment acceleration enabled.</div>
                         </div>
 
                         <div class="form-group">
@@ -160,10 +160,12 @@
                                 <div class="select-wrapper">
                                     <select id="quick-format">
                                         <option value="bestvideo+bestaudio/best" selected>🔥 MAX Quality (Highest Available: 4K / 1080p 60fps)</option>
+                                        <option value="compat_mp4">🎬 Universal MP4 (Best H.264 / AAC Compatibility)</option>
+                                        <option value="bestvideo[height<=1440]+bestaudio/best">1440p 2K QHD (1440p60 / 1440p)</option>
                                         <option value="bestvideo[height<=1080]+bestaudio/best">1080p Full HD (1080p60 / 1080p)</option>
                                         <option value="bestvideo[height<=720]+bestaudio/best">720p HD (720p60 / 720p)</option>
-                                        <option value="bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best">⚡ Fast Remux MP4 (H.264/AAC Legacy)</option>
-                                        <option value="bestaudio/best">Audio Only (MP3/M4A)</option>
+                                        <option value="audio_mp3">🎵 Audio Only (MP3 - 320kbps High Quality)</option>
+                                        <option value="audio_m4a">🎵 Audio Only (M4A / AAC Original)</option>
                                     </select>
                                 </div>
                             </div>
@@ -254,6 +256,12 @@
                                 <div class="input-wrapper">
                                     <input type="text" id="section-start" placeholder="00:01:30" value="00:00:00">
                                 </div>
+                                <div class="timestamp-nudge-row">
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('start', -5)" title="Subtract 5 seconds">-5s</button>
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('start', -1)" title="Subtract 1 second">-1s</button>
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('start', 1)" title="Add 1 second">+1s</button>
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('start', 5)" title="Add 5 seconds">+5s</button>
+                                </div>
                             </div>
                             <div class="form-group flex-1">
                                 <div class="label-with-val">
@@ -261,6 +269,12 @@
                                 </div>
                                 <div class="input-wrapper">
                                     <input type="text" id="section-end" placeholder="00:04:15" value="00:01:00">
+                                </div>
+                                <div class="timestamp-nudge-row">
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('end', -5)" title="Subtract 5 seconds">-5s</button>
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('end', -1)" title="Subtract 1 second">-1s</button>
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('end', 1)" title="Add 1 second">+1s</button>
+                                    <button type="button" class="nudge-btn" onclick="nudgeSectionTime('end', 5)" title="Add 5 seconds">+5s</button>
                                 </div>
                             </div>
                         </div>
@@ -276,11 +290,14 @@
                         </div>
 
                         <div class="form-row timestamp-quick-actions">
-                            <button type="button" class="btn btn-secondary btn-sm flex-1" onclick="markCurrentTimestamp('start')">
-                                <i class="fa-solid fa-play" style="color: #22c55e;"></i> Set Start Time from Player
+                            <button type="button" class="btn btn-secondary btn-sm flex-1" onclick="markCurrentTimestamp('start')" title="Set Start Time from current video player position">
+                                <i class="fa-solid fa-play" style="color: #22c55e;"></i> Set Start
                             </button>
-                            <button type="button" class="btn btn-secondary btn-sm flex-1" onclick="markCurrentTimestamp('end')">
-                                <i class="fa-solid fa-stop" style="color: #ef4444;"></i> Set End Time from Player
+                            <button type="button" class="btn btn-secondary btn-sm flex-1" id="btn-preview-clip-loop" onclick="toggleClipPreviewLoop()" title="Play and loop your Start → End clip inside the video player">
+                                <i class="fa-solid fa-repeat" style="color: #06b6d4;"></i> Preview Clip
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm flex-1" onclick="markCurrentTimestamp('end')" title="Set End Time from current video player position">
+                                <i class="fa-solid fa-stop" style="color: #ef4444;"></i> Set End
                             </button>
                         </div>
 
@@ -288,11 +305,35 @@
                             <label for="section-format-preset"><i class="fa-solid fa-display"></i> Quality / Format Preset</label>
                             <div class="select-wrapper">
                                 <select id="section-format-preset">
-                                    <option value="auto">Auto-Detect Highest Available (1080p60 / 720p)</option>
-                                    <option value="1080p60">1080p 60fps (Kick High Quality)</option>
-                                    <option value="720p">720p HD</option>
-                                    <option value="best">Default Best MP4</option>
+                                    <option value="auto" selected>🔥 Auto Best MP4 (Highest Available: 4K / 1080p60)</option>
+                                    <option value="compat">🎬 Universal MP4 (H.264 / AAC Compatibility)</option>
+                                    <option value="1080p">1080p Full HD (&lt;= 1080p)</option>
+                                    <option value="720p">720p HD (&lt;= 720p)</option>
+                                    <option value="480p">480p Compact (&lt;= 480p)</option>
+                                    <option value="mp3">🎵 Audio Soundbite Only (MP3 - 320kbps)</option>
                                 </select>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <label for="section-cut-mode"><i class="fa-solid fa-scissors"></i> Cut Mode</label>
+                                <div class="select-wrapper">
+                                    <select id="section-cut-mode">
+                                        <option value="fast" selected>⚡ Fast Stream Copy (Instant)</option>
+                                        <option value="exact">🎯 Exact Frame Cut (No Frozen Start)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group flex-1" id="section-crop-group">
+                                <label for="section-crop-mode"><i class="fa-solid fa-crop-simple"></i> Aspect Ratio</label>
+                                <div class="select-wrapper">
+                                    <select id="section-crop-mode">
+                                        <option value="original" selected>🖥️ Original (16:9 / Source)</option>
+                                        <option value="vertical_crop">📱 9:16 Vertical Crop (Shorts / TikTok)</option>
+                                        <option value="vertical_blur">📱 9:16 Blurred Backdrop</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 
@@ -1002,6 +1043,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=3.4"></script>
+    <script src="app.js?v=3.5"></script>
 </body>
 </html>

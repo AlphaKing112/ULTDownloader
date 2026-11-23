@@ -104,7 +104,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const mobileToolDropdown = document.getElementById('mobile-tool-dropdown');
 
+    function updateActionBtnForTab() {
+        const meta = tabMetadata[activeTabId];
+        if (!meta) return;
+        let btnLabel = meta.btnText;
+        if (activeTabId === 'tab-quick-download') {
+            const fmt = document.getElementById('quick-format')?.value || '';
+            if (fmt === 'audio_mp3') btnLabel = 'Download Audio (MP3)';
+            else if (fmt === 'audio_m4a') btnLabel = 'Download Audio (M4A)';
+            else if (fmt === 'compat_mp4') btnLabel = 'Download Universal MP4';
+            else if (fmt.includes('1440')) btnLabel = 'Download Video (1440p 2K)';
+            else if (fmt === 'bestvideo[height<=1080]+bestaudio/best') btnLabel = 'Download Video (1080p HD)';
+            else if (fmt === 'bestvideo[height<=720]+bestaudio/best') btnLabel = 'Download Video (720p HD)';
+        } else if (activeTabId === 'tab-section-clipper') {
+            const preset = document.getElementById('section-format-preset')?.value || 'auto';
+            const crop = document.getElementById('section-crop-mode')?.value || 'original';
+            const cropGroup = document.getElementById('section-crop-group');
+            const cutSelect = document.getElementById('section-cut-mode');
+            if (cropGroup) cropGroup.style.display = preset === 'mp3' ? 'none' : '';
+            if (cutSelect && cutSelect.closest('.form-group')) {
+                cutSelect.closest('.form-group').style.display = preset === 'mp3' ? 'none' : '';
+            }
+            if (preset === 'mp3') btnLabel = 'Download Audio Clip (MP3)';
+            else if (crop === 'vertical_crop' || crop === 'vertical_blur') btnLabel = 'Download 9:16 Vertical Clip';
+        }
+        actionBtn.querySelector('span').textContent = btnLabel;
+    }
+
     function activateTab(targetTabId) {
+        if (typeof stopClipPreviewLoop === 'function' && activeTabId !== targetTabId) {
+            stopClipPreviewLoop(false);
+        }
         navTabs.forEach(t => {
             const match = t.getAttribute('data-tab') === targetTabId;
             t.classList.toggle('active', match);
@@ -129,10 +159,13 @@ document.addEventListener('DOMContentLoaded', () => {
             tabTitle.textContent = meta.title;
             optionBadge.textContent = meta.optionBadge;
             headerIcon.className = `fa-solid ${meta.icon} header-icon`;
-            actionBtn.querySelector('span').textContent = meta.btnText;
         }
 
+        updateActionBtnForTab();
         updateGeneratedCommand();
+        if (typeof checkMediaUrlInput === 'function') {
+            checkMediaUrlInput();
+        }
     }
 
     // --- Tab Switching Logic ---
@@ -403,7 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Title Sanitizer & Auto-Fetch Helper ---
     function sanitizeFilename(str) {
         if (!str) return '';
-        return str.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+        return str.replace(/[\\/:*?"<>|$]/g, '_').replace(/\s+/g, ' ').trim();
     }
 
     const titleFetchCache = new Map();
@@ -1294,32 +1327,65 @@ document.addEventListener('DOMContentLoaded', () => {
         switch (activeTabId) {
             case 'tab-quick-download': {
                 const url = document.getElementById('quick-url').value.trim() || '<VIDEO_URL>';
+                const titleVal = document.getElementById('quick-title')?.value.trim();
+                const cleanTitle = titleVal ? sanitizeFilename(titleVal) : '';
                 const fmt = document.getElementById('quick-format').value;
-                let out = 'downloads/%(title)s_%(height)sp.%(ext)s';
                 const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
-                cmd = `yt-dlp${impersonate} --js-runtimes node --newline --no-part -f "${fmt}" --merge-output-format mp4 -o "${out}" "${url}"`;
+
+                if (fmt === 'audio_mp3' || fmt === 'audio_m4a' || fmt === 'bestaudio/best') {
+                    const audioFmt = fmt === 'audio_m4a' ? 'm4a' : 'mp3';
+                    const audioSel = audioFmt === 'm4a' ? 'bestaudio[ext=m4a]/bestaudio/best' : 'bestaudio/best';
+                    const out = `downloads/${cleanTitle || '%(title)s'}.%(ext)s`;
+                    cmd = `yt-dlp${impersonate} --js-runtimes node --newline --no-part -f "${audioSel}" -x --audio-format ${audioFmt} --audio-quality 0 -o "${out}" "${url}"`;
+                } else {
+                    const realFmt = fmt === 'compat_mp4'
+                        ? 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best'
+                        : fmt;
+                    const sortFlag = fmt === 'compat_mp4' ? ' -S "vcodec:h264,acodec:m4a"' : '';
+                    const out = cleanTitle
+                        ? `downloads/${cleanTitle}.%(ext)s`
+                        : `downloads/%(title)s_%(height|best)sp.%(ext)s`;
+                    cmd = `yt-dlp${impersonate} --js-runtimes node --newline --no-part -f "${realFmt}"${sortFlag} --merge-output-format mp4 -o "${out}" "${url}"`;
+                }
                 break;
             }
 
             case 'tab-section-clipper': {
                 const url = document.getElementById('section-url').value.trim() || '<VIDEO_URL>';
+                const titleVal = document.getElementById('section-title')?.value.trim();
+                const cleanTitle = titleVal ? sanitizeFilename(titleVal) : '';
                 const start = document.getElementById('section-start').value.trim() || '00:00:00';
                 const end = document.getElementById('section-end').value.trim() || '00:01:00';
-                const preset = document.getElementById('section-format-preset').value;
-                let out = 'downloads/%(title)s.mp4';
-                // -movflags +faststart: moves MP4 index to front → Windows player can play immediately
-                // -avoid_negative_ts make_zero + -fflags +genpts+discardcorrupt+igndts: fixes keyframe timestamp misalignment
-                const ffmpegFix = '-c copy -avoid_negative_ts make_zero -fflags +genpts+discardcorrupt+igndts -movflags +faststart';
+                const rangeTag = `${start.replace(/[:.]/g, '-')}_to_${end.replace(/[:.]/g, '-')}`;
+                const preset = document.getElementById('section-format-preset')?.value || 'auto';
+                const cutMode = document.getElementById('section-cut-mode')?.value || 'fast';
+                const cropMode = document.getElementById('section-crop-mode')?.value || 'original';
                 const impersonate = url.toLowerCase().includes('kick.com') ? ' --impersonate Chrome' : '';
 
-                const avcFormat = 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]/bestvideo+bestaudio/best[ext=mp4]';
-                if (url.toLowerCase().includes('kick.com')) {
-                    const fmtStr = preset === 'auto' ? avcFormat : preset;
-                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --download-sections "*${start}-${end}" -f "${fmtStr}" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
-                } else if (url.toLowerCase().includes('twitch.tv')) {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "${avcFormat}" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                if (preset === 'mp3') {
+                    const baseName = cleanTitle ? `${cleanTitle}_${rangeTag}` : `%(title)s_${rangeTag}`;
+                    const out = `downloads/${baseName}.%(ext)s`;
+                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --no-part --download-sections "*${start}-${end}" -f "bestaudio/best" -x --audio-format mp3 --audio-quality 0 -o "${out}" "${url}"`;
                 } else {
-                    cmd = `yt-dlp --js-runtimes node --newline --download-sections "*${start}-${end}" -f "${avcFormat}" --merge-output-format mp4 --postprocessor-args "ffmpeg:${ffmpegFix}" -o "${out}" "${url}"`;
+                    const formatMap = {
+                        auto: 'bestvideo+bestaudio/best',
+                        compat: 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best',
+                        '1080p': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+                        '720p': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+                        '480p': 'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
+                        '1080p60': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+                        best: 'bestvideo+bestaudio/best'
+                    };
+                    const fmtStr = formatMap[preset] || formatMap.auto;
+                    const sortFlag = preset === 'compat' ? ' -S "vcodec:h264,acodec:m4a"' : '';
+                    const exactFlag = cutMode === 'exact' ? ' --force-keyframes-at-cuts' : '';
+                    const ppArgs = cutMode === 'exact'
+                        ? ' --postprocessor-args "Merger+ffmpeg:-movflags +faststart"'
+                        : ' --downloader-args "ffmpeg_i:-fflags +discardcorrupt+igndts" --postprocessor-args "Merger+ffmpeg:-c copy -avoid_negative_ts make_zero -movflags +faststart"';
+                    const cropSuffix = (cropMode === 'vertical_crop' || cropMode === 'vertical_blur') ? '_9x16' : '';
+                    const baseName = cleanTitle ? `${cleanTitle}_${rangeTag}${cropSuffix}` : `%(title)s_${rangeTag}${cropSuffix}`;
+                    const out = `downloads/${baseName}.%(ext)s`;
+                    cmd = `yt-dlp --js-runtimes node${impersonate} --newline --no-part --download-sections "*${start}-${end}"${exactFlag} -f "${fmtStr}"${sortFlag} --merge-output-format mp4${ppArgs} -o "${out}" "${url}"`;
                 }
                 break;
             }
@@ -1447,10 +1513,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add change/input listeners across inputs
     document.querySelectorAll('input, select').forEach(elem => {
         elem.addEventListener('input', () => {
+            updateActionBtnForTab();
             updateGeneratedCommand();
             checkMediaUrlInput();
         });
         elem.addEventListener('change', () => {
+            updateActionBtnForTab();
             updateGeneratedCommand();
             checkMediaUrlInput();
         });
@@ -1463,11 +1531,83 @@ document.addEventListener('DOMContentLoaded', () => {
     const playerIcon = document.getElementById('player-type-icon');
     const playerSelector = document.getElementById('player-selector');
 
-    let activePlayerType = 'none'; // 'youtube', 'twitch', 'none'
+    let activePlayerType = 'none'; // 'youtube', 'twitch', 'kick', 'html5', 'none'
     let currentEmbeddedMediaId = ''; // Track active video/VOD ID to prevent reloading iframe
     let ytPlayerInstance = null;
     let twitchPlayerInstance = null;
+    let activeKickHlsInstance = null;
+    let clipPreviewLoopTimer = null;
     let lastActiveUrl = '';
+
+    function getActiveTabUrlInputId() {
+        const tabUrlMap = {
+            'tab-quick-download': 'quick-url',
+            'tab-section-clipper': 'section-url',
+            'tab-multi-section': 'multi-url',
+            'tab-silence-cutter': 'silence-url',
+            'tab-yt-tags': 'tags-url',
+            'tab-yt-thumbnail': 'thumb-url'
+        };
+        return tabUrlMap[activeTabId] || null;
+    }
+
+    function getPreferredActiveUrl() {
+        const tabInputId = getActiveTabUrlInputId();
+        if (tabInputId) {
+            const tabVal = document.getElementById(tabInputId)?.value.trim();
+            if (tabVal && tabVal.length > 10) return tabVal;
+        }
+        const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'silence-url', 'tags-url', 'thumb-url'];
+        for (const id of urlInputIds) {
+            const elem = document.getElementById(id);
+            if (elem && elem.value.trim().length > 10) {
+                return elem.value.trim();
+            }
+        }
+        return lastActiveUrl || '';
+    }
+
+    function cleanupDirectHtml5Player() {
+        if (activeKickHlsInstance) {
+            try { activeKickHlsInstance.destroy(); } catch (e) {}
+            activeKickHlsInstance = null;
+        }
+        const vid = document.getElementById('direct-html5-player');
+        if (vid) {
+            try {
+                vid.pause();
+                vid.removeAttribute('src');
+                vid.load();
+            } catch (e) {}
+        }
+    }
+
+    function mountDirectHtml5Video(streamUrl, fallbackIframeSrc = null) {
+        if (!playerContainer) return;
+        cleanupDirectHtml5Player();
+        playerContainer.innerHTML = `<video id="direct-html5-player" controls playsinline style="width:100%;height:320px;background:#000;border-radius:12px;outline:none;"></video>`;
+        const videoEl = document.getElementById('direct-html5-player');
+        if (!videoEl) return;
+
+        const handlePlayFail = () => {
+            if (fallbackIframeSrc && playerContainer) {
+                cleanupDirectHtml5Player();
+                playerContainer.innerHTML = `<iframe src="${fallbackIframeSrc}" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+            }
+        };
+
+        if (streamUrl.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
+            activeKickHlsInstance = new Hls({ enableWorker: false });
+            activeKickHlsInstance.loadSource(streamUrl);
+            activeKickHlsInstance.attachMedia(videoEl);
+            activeKickHlsInstance.on(Hls.Events.ERROR, (_evt, data) => {
+                if (data && data.fatal) handlePlayFail();
+            });
+        } else {
+            videoEl.onerror = handlePlayFail;
+            videoEl.src = streamUrl;
+        }
+    }
 
     function loadYtIframeApi() {
         if (window.YT && window.YT.Player) return Promise.resolve();
@@ -1510,17 +1650,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.checkMediaUrlInput = function() {
-        const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'silence-url', 'tags-url', 'thumb-url'];
-        let detectedUrl = '';
-
-        for (const id of urlInputIds) {
-            const elem = document.getElementById(id);
-            if (elem && elem.value.trim().length > 10) {
-                detectedUrl = elem.value.trim();
-                break;
-            }
-        }
-
+        const detectedUrl = getPreferredActiveUrl();
         if (!detectedUrl) return;
 
         const currentMode = playerSelector ? playerSelector.value : 'auto';
@@ -1554,11 +1684,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const ytId = extractYtId(url);
             if (!ytId) return;
 
-            // Prevent re-rendering player if video ID has not changed
             if (activePlayerType === 'youtube' && currentEmbeddedMediaId === ytId && !mediaPlayerCard.classList.contains('hidden')) {
                 return;
             }
 
+            cleanupDirectHtml5Player();
+            stopClipPreviewLoop(false);
             currentEmbeddedMediaId = ytId;
             activePlayerType = 'youtube';
 
@@ -1590,11 +1721,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!mediaId) return;
 
-            // Prevent re-rendering player if Twitch media ID has not changed
             if (activePlayerType === 'twitch' && currentEmbeddedMediaId === mediaId && !mediaPlayerCard.classList.contains('hidden')) {
                 return;
             }
 
+            cleanupDirectHtml5Player();
+            stopClipPreviewLoop(false);
             currentEmbeddedMediaId = mediaId;
             activePlayerType = 'twitch';
 
@@ -1618,27 +1750,47 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             } else if (clipMatch && clipMatch[1]) {
                 const clipId = clipMatch[1];
+                const fallbackIframe = `https://clips.twitch.tv/embed?clip=${clipId}&parent=${currentHost}&autoplay=false`;
                 if (playerTitle) playerTitle.textContent = `Twitch Clip Player (${clipId})`;
-                if (playerContainer) {
-                    playerContainer.innerHTML = `<iframe src="https://clips.twitch.tv/embed?clip=${clipId}&parent=${currentHost}&autoplay=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                if (clipDirectUrlCache.has(clipId)) {
+                    mountDirectHtml5Video(clipDirectUrlCache.get(clipId), fallbackIframe);
+                } else {
+                    try {
+                        const r = await fetch(`/api/clip-preview?platform=twitch&slug=${encodeURIComponent(clipId)}`);
+                        const data = await r.json();
+                        if (data && data.success && data.previewUrl) {
+                            clipDirectUrlCache.set(clipId, data.previewUrl);
+                            mountDirectHtml5Video(data.previewUrl, fallbackIframe);
+                        } else if (playerContainer) {
+                            playerContainer.innerHTML = `<iframe src="${fallbackIframe}" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                        }
+                    } catch (e) {
+                        if (playerContainer) {
+                            playerContainer.innerHTML = `<iframe src="${fallbackIframe}" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                        }
+                    }
                 }
             }
         } else if ((targetMode === 'kick' || targetMode === 'auto') && isKick) {
-            const channelMatch = url.match(/kick\.com\/([A-Za-z0-9_.-]+)/i);
             const clipMatch = url.match(/(?:kick\.com\/[^\/]+\/clips\/|kick\.com\/clips\/|[?&]clip=)([A-Za-z0-9_-]+)/i);
             const vodMatch = url.match(/kick\.com\/[^\/]+\/videos\/([A-Za-z0-9_-]+)|kick\.com\/videos\/([A-Za-z0-9_-]+)/i);
+            const channelMatch = url.match(/kick\.com\/([A-Za-z0-9_.-]+)/i);
 
             let channelSlug = '';
             if (channelMatch && !['video', 'videos', 'clips', 'categories'].includes(channelMatch[1].toLowerCase())) {
                 channelSlug = channelMatch[1];
             }
 
-            const mediaId = (vodMatch && (vodMatch[1] || vodMatch[2])) ? `kick_vod_${vodMatch[1] || vodMatch[2]}` : ((clipMatch && clipMatch[1]) ? `kick_clip_${clipMatch[1]}` : (channelSlug ? `kick_live_${channelSlug}` : 'kick_media'));
+            const kickVodId = vodMatch ? (vodMatch[1] || vodMatch[2]) : '';
+            const kickClipId = clipMatch ? clipMatch[1] : '';
+            const mediaId = kickVodId ? `kick_vod_${kickVodId}` : (kickClipId ? `kick_clip_${kickClipId}` : (channelSlug ? `kick_live_${channelSlug}` : 'kick_media'));
 
             if (activePlayerType === 'kick' && currentEmbeddedMediaId === mediaId && !mediaPlayerCard.classList.contains('hidden')) {
                 return;
             }
 
+            cleanupDirectHtml5Player();
+            stopClipPreviewLoop(false);
             currentEmbeddedMediaId = mediaId;
             activePlayerType = 'kick';
 
@@ -1646,12 +1798,28 @@ document.addEventListener('DOMContentLoaded', () => {
             if (playerSelector) playerSelector.value = 'kick';
             if (playerIcon) playerIcon.className = 'fa-solid fa-bolt player-icon kick';
 
+            if (kickVodId || kickClipId) {
+                if (playerTitle) playerTitle.textContent = kickVodId ? `Kick VOD Player (${kickVodId.slice(0, 8)}...)` : `Kick Clip Player (${kickClipId})`;
+                const apiUrl = kickVodId
+                    ? `/api/clip-preview?platform=kick&vodId=${encodeURIComponent(kickVodId)}`
+                    : `/api/clip-preview?platform=kick&slug=${encodeURIComponent(kickClipId)}`;
+                try {
+                    const r = await fetch(apiUrl);
+                    const data = await r.json();
+                    if (data && data.success && data.previewUrl) {
+                        mountDirectHtml5Video(data.previewUrl);
+                        logToConsole(`[Player] Kick ${kickVodId ? 'VOD' : 'Clip'} loaded with live timestamp controls!`, 'info');
+                        return;
+                    }
+                } catch (e) {}
+            }
+
             if (playerTitle) {
                 playerTitle.textContent = channelSlug ? `Kick Player (@${channelSlug})` : 'Kick Media Player';
             }
 
             if (playerContainer) {
-                const targetSlug = channelSlug || (clipMatch ? clipMatch[1] : (vodMatch ? (vodMatch[1] || vodMatch[2]) : ''));
+                const targetSlug = kickClipId || kickVodId || channelSlug || '';
                 playerContainer.innerHTML = `<iframe src="https://player.kick.com/${encodeURIComponent(targetSlug)}?autoplay=false&muted=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
             }
             logToConsole(`[Player] Kick player loaded for: ${url}`, 'info');
@@ -1664,16 +1832,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'silence-url', 'tags-url', 'thumb-url'];
-        let activeUrl = lastActiveUrl;
-        for (const id of urlInputIds) {
-            const val = document.getElementById(id)?.value.trim();
-            if (val) {
-                activeUrl = val;
-                break;
-            }
-        }
-
+        const activeUrl = getPreferredActiveUrl();
         if (activeUrl) {
             embedVideoPlayer(activeUrl, mode);
         } else {
@@ -1682,6 +1841,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.closeMediaPlayer = window.closeTwitchPlayer = function() {
+        cleanupDirectHtml5Player();
+        stopClipPreviewLoop(false);
         if (mediaPlayerCard) mediaPlayerCard.classList.add('hidden');
         if (playerContainer) playerContainer.innerHTML = '';
         activePlayerType = 'none';
@@ -1737,18 +1898,132 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getPlayerCurrentTime() {
+        const html5Video = document.getElementById('direct-html5-player') || document.querySelector('#player-iframe-container video');
+        if (html5Video && !isNaN(html5Video.currentTime)) {
+            return html5Video.currentTime || 0;
+        }
         if (activePlayerType === 'youtube' && ytPlayerInstance && typeof ytPlayerInstance.getCurrentTime === 'function') {
             try { return ytPlayerInstance.getCurrentTime() || 0; } catch (e) { return 0; }
         }
         if (activePlayerType === 'twitch' && twitchPlayerInstance && typeof twitchPlayerInstance.getCurrentTime === 'function') {
             try { return twitchPlayerInstance.getCurrentTime() || 0; } catch (e) { return 0; }
         }
-        const html5Video = document.querySelector('#player-iframe-container video');
-        if (html5Video && !isNaN(html5Video.currentTime)) {
-            return html5Video.currentTime || 0;
-        }
         return 0;
     }
+
+    function seekAndPlayPlayer(seconds) {
+        const html5Video = document.getElementById('direct-html5-player') || document.querySelector('#player-iframe-container video');
+        if (html5Video) {
+            try {
+                html5Video.currentTime = seconds;
+                html5Video.play().catch(() => {});
+                return true;
+            } catch (e) {}
+        }
+        if (activePlayerType === 'youtube' && ytPlayerInstance && typeof ytPlayerInstance.seekTo === 'function') {
+            try {
+                ytPlayerInstance.seekTo(seconds, true);
+                if (typeof ytPlayerInstance.playVideo === 'function') ytPlayerInstance.playVideo();
+                return true;
+            } catch (e) {}
+        }
+        if (activePlayerType === 'twitch' && twitchPlayerInstance && typeof twitchPlayerInstance.seek === 'function') {
+            try {
+                twitchPlayerInstance.seek(seconds);
+                if (typeof twitchPlayerInstance.play === 'function') twitchPlayerInstance.play();
+                return true;
+            } catch (e) {}
+        }
+        return false;
+    }
+
+    function pauseActivePlayer() {
+        const html5Video = document.getElementById('direct-html5-player') || document.querySelector('#player-iframe-container video');
+        if (html5Video) {
+            try { html5Video.pause(); } catch (e) {}
+        }
+        if (activePlayerType === 'youtube' && ytPlayerInstance && typeof ytPlayerInstance.pauseVideo === 'function') {
+            try { ytPlayerInstance.pauseVideo(); } catch (e) {}
+        }
+        if (activePlayerType === 'twitch' && twitchPlayerInstance && typeof twitchPlayerInstance.pause === 'function') {
+            try { twitchPlayerInstance.pause(); } catch (e) {}
+        }
+    }
+
+    window.nudgeSectionTime = function(targetType = 'start', deltaSec = 1) {
+        const targetId = targetType === 'start' ? 'section-start' : 'section-end';
+        const elem = document.getElementById(targetId);
+        if (!elem) return;
+        const curSec = parseTimestampToSeconds(elem.value);
+        const nextSec = Math.max(0, Math.round(curSec + deltaSec));
+        elem.value = formatSecondsToHHMMSS(nextSec);
+        elem.dispatchEvent(new Event('input'));
+        updateSectionDurationDisplay();
+        updateGeneratedCommand();
+    };
+
+    function stopClipPreviewLoop(pausePlayer = true) {
+        if (clipPreviewLoopTimer) {
+            clearInterval(clipPreviewLoopTimer);
+            clipPreviewLoopTimer = null;
+        }
+        if (pausePlayer) pauseActivePlayer();
+        const btn = document.getElementById('btn-preview-clip-loop');
+        if (btn) {
+            btn.classList.remove('btn-preview-active');
+            btn.innerHTML = `<i class="fa-solid fa-repeat" style="color: #06b6d4;"></i> Preview Clip`;
+        }
+    }
+
+    window.toggleClipPreviewLoop = async function() {
+        if (clipPreviewLoopTimer) {
+            stopClipPreviewLoop(true);
+            logToConsole('[Clip Preview] Stopped preview loop.', 'info');
+            return;
+        }
+
+        const url = document.getElementById('section-url')?.value.trim();
+        if (!url) {
+            logToConsole('[Clip Preview] Paste a video link first to preview the clip.', 'error');
+            return;
+        }
+
+        const startSec = parseTimestampToSeconds(document.getElementById('section-start')?.value);
+        const endSec = parseTimestampToSeconds(document.getElementById('section-end')?.value);
+        if (endSec <= startSec) {
+            logToConsole('[Clip Preview] End time must be greater than Start time.', 'error');
+            return;
+        }
+
+        if (activePlayerType === 'none' || !mediaPlayerCard || mediaPlayerCard.classList.contains('hidden')) {
+            await embedVideoPlayer(url, 'auto');
+            await new Promise(r => setTimeout(r, 700));
+        }
+
+        if (!seekAndPlayPlayer(startSec)) {
+            logToConsole('[Clip Preview] Player is still loading or iframe does not support direct seeking. Try pressing play in the player first.', 'system');
+            return;
+        }
+
+        const btn = document.getElementById('btn-preview-clip-loop');
+        if (btn) {
+            btn.classList.add('btn-preview-active');
+            btn.innerHTML = `<i class="fa-solid fa-stop" style="color: #ef4444;"></i> Stop Preview`;
+        }
+
+        const startStr = formatSecondsToHHMMSS(startSec);
+        const endStr = formatSecondsToHHMMSS(endSec);
+        logToConsole(`[Clip Preview] Looping ${startStr} → ${endStr} in player...`, 'success');
+
+        clipPreviewLoopTimer = setInterval(() => {
+            const curStart = parseTimestampToSeconds(document.getElementById('section-start')?.value);
+            const curEnd = parseTimestampToSeconds(document.getElementById('section-end')?.value);
+            const curPos = getPlayerCurrentTime();
+            if (curEnd > curStart && curPos >= curEnd) {
+                seekAndPlayPlayer(curStart);
+            }
+        }, 250);
+    };
 
     // Live Player Position Ticker
     setInterval(() => {
@@ -1757,14 +2032,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (activePlayerType === 'none' || (mediaPlayerCard && mediaPlayerCard.classList.contains('hidden'))) return;
 
         const sec = getPlayerCurrentTime();
-        if (sec > 0 || ytPlayerInstance || twitchPlayerInstance) {
+        const html5Video = document.getElementById('direct-html5-player');
+        if (sec > 0 || ytPlayerInstance || twitchPlayerInstance || html5Video) {
             liveTimeElem.textContent = formatSecondsToHHMMSS(sec);
         }
     }, 500);
 
     window.markCurrentTimestamp = function(targetType = 'start') {
+        const html5Video = document.getElementById('direct-html5-player');
         const currentSec = getPlayerCurrentTime();
-        if (currentSec <= 0 && activePlayerType === 'none') {
+        if (currentSec <= 0 && activePlayerType === 'none' && !html5Video) {
             logToConsole('[Timestamp] Play or scrub the video in the embedded player above to capture exact timestamps.', 'system');
             return;
         }
@@ -1799,16 +2076,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const isDefaultZero = !timeStr || timeStr === '00:00:00' || timeStr === '0';
 
-        // Find active video URL
-        let activeUrl = lastActiveUrl;
-        const urlInputIds = ['thumb-url', 'section-url', 'quick-url', 'multi-url', 'tags-url'];
-        for (const id of urlInputIds) {
-            const val = document.getElementById(id)?.value.trim();
-            if (val) {
-                activeUrl = val;
-                break;
-            }
-        }
+        // Find active video URL (prioritizing the currently active tab)
+        const activeUrl = getPreferredActiveUrl();
 
         if (!activeUrl) {
             logToConsole('[Thumbnail] Please enter or paste a video link first to capture a thumbnail.', 'error');
@@ -2315,6 +2584,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const singleFileTabs = ['tab-quick-download', 'tab-section-clipper', 'tab-silence-cutter', 'tab-file-converter'];
 
+        // 0. Validate URL & timestamp ranges BEFORE opening Save As picker
+        if (activeTabId === 'tab-quick-download') {
+            const qUrl = document.getElementById('quick-url')?.value.trim();
+            if (!qUrl) {
+                logToConsole('[Error] Please enter or paste a Media Link URL first.', 'error');
+                return;
+            }
+        } else if (activeTabId === 'tab-section-clipper') {
+            const sUrl = document.getElementById('section-url')?.value.trim();
+            if (!sUrl) {
+                logToConsole('[Error] Please pick a VOD or enter a Video Link URL first.', 'error');
+                return;
+            }
+            const startSec = parseTimestampToSeconds(document.getElementById('section-start')?.value);
+            const endSec = parseTimestampToSeconds(document.getElementById('section-end')?.value);
+            if (endSec <= startSec) {
+                updateSectionDurationDisplay();
+                logToConsole('[Error] Invalid time range: End Time must be greater than Start Time.', 'error');
+                return;
+            }
+        }
+
         // 1. Open Save As Folder Picker FIRST before initiating download process (Single-file operations only)
         if (singleFileTabs.includes(activeTabId) && typeof window.showSaveFilePicker === 'function') {
             let suggestedTitle = '';
@@ -2326,14 +2617,24 @@ document.addEventListener('DOMContentLoaded', () => {
             let ext = 'mp4';
             if (activeTabId === 'tab-quick-download') {
                 const fmtVal = document.getElementById('quick-format')?.value || '';
-                if (fmtVal.includes('bestaudio') || fmtVal.includes('mp3')) ext = 'mp3';
-                else if (fmtVal.includes('m4a')) ext = 'm4a';
+                if (fmtVal === 'audio_mp3' || fmtVal.includes('bestaudio') || fmtVal.includes('mp3')) ext = 'mp3';
+                else if (fmtVal === 'audio_m4a' || fmtVal.includes('m4a')) ext = 'm4a';
+            } else if (activeTabId === 'tab-section-clipper') {
+                const presetVal = document.getElementById('section-format-preset')?.value || '';
+                if (presetVal === 'mp3') ext = 'mp3';
             } else if (activeTabId === 'tab-file-converter') {
                 const presetVal = document.getElementById('convert-preset')?.value || '';
                 if (presetVal === 'audio') ext = 'mp3';
             }
 
             let suggestedName = suggestedTitle ? sanitizeFilename(suggestedTitle) : 'Video_Clip';
+            if (activeTabId === 'tab-section-clipper') {
+                const sVal = (document.getElementById('section-start')?.value.trim() || '00:00:00').replace(/[:.]/g, '-');
+                const eVal = (document.getElementById('section-end')?.value.trim() || '00:01:00').replace(/[:.]/g, '-');
+                const cropVal = document.getElementById('section-crop-mode')?.value || 'original';
+                const cropTag = (ext === 'mp4' && (cropVal === 'vertical_crop' || cropVal === 'vertical_blur')) ? '_9x16' : '';
+                suggestedName += `_${sVal}_to_${eVal}${cropTag}`;
+            }
             if (!suggestedName.toLowerCase().endsWith('.' + ext)) {
                 suggestedName += '.' + ext;
             }
@@ -2356,46 +2657,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        let targetPath = getTargetOutputFileForCheck();
-
-        // If targetPath still contains %(title)s template, resolve title via URL
-        if (targetPath.includes('%(title)s')) {
-            let activeUrl = '';
-            if (activeTabId === 'tab-quick-download') activeUrl = document.getElementById('quick-url')?.value.trim();
-            else if (activeTabId === 'tab-section-clipper') activeUrl = document.getElementById('section-url')?.value.trim();
-
-            if (activeUrl) {
+        let fileExists = false;
+        let existingFileName = '';
+        if (activeTabId === 'tab-file-converter') {
+            const targetPath = getTargetOutputFileForCheck();
+            if (targetPath && !targetPath.includes('%(')) {
                 try {
-                    const res = await fetch('/api/fetch-title', {
+                    const checkRes = await fetch('/api/check-file', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: activeUrl })
+                        body: JSON.stringify({ filePath: targetPath })
                     });
-                    const data = await res.json();
-                    if (data.success && data.title) {
-                        const clean = sanitizeFilename(data.title);
-                        targetPath = targetPath.replace(/%\(title\)s/g, clean);
+                    const checkData = await checkRes.json();
+                    if (checkData.success && checkData.exists) {
+                        fileExists = true;
+                        existingFileName = checkData.fileName || targetPath;
                     }
                 } catch (e) {}
             }
-        }
-
-        // Check if file exists before running
-        let fileExists = false;
-        let existingFileName = '';
-        if (targetPath && !targetPath.includes('%(')) {
-            try {
-                const checkRes = await fetch('/api/check-file', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath: targetPath })
-                });
-                const checkData = await checkRes.json();
-                if (checkData.success && checkData.exists) {
-                    fileExists = true;
-                    existingFileName = checkData.fileName || targetPath;
-                }
-            } catch (e) {}
         }
 
         const cmd = buildCommandForActiveTab();
@@ -2655,10 +2934,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             try {
                 showProgressBar('Connecting & Downloading Media...');
+                const cropMode = activeTabId === 'tab-section-clipper' && (document.getElementById('section-format-preset')?.value !== 'mp3')
+                    ? (document.getElementById('section-crop-mode')?.value || 'original')
+                    : 'original';
                 const response = await fetch('/api/execute', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: cmd, tabId: activeTabId })
+                    body: JSON.stringify({ command: cmd, tabId: activeTabId, cropMode })
                 });
 
                 if (response.ok && response.body) {
@@ -2690,36 +2972,37 @@ document.addEventListener('DOMContentLoaded', () => {
                                     if (activeTabId === 'tab-hdd-mirror' && isSuccess) {
                                         logToConsole(`[Robocopy] HDD sync completed successfully (Exit Code: ${data.exitCode})!`, 'success');
                                     }
-                                    // downloadToken + fileName come in the same done packet
                                     if (isSuccess && data.downloadToken && data.fileName) {
                                         const fname = data.fileName;
-                                        logToConsole(`[Download Ready] Transferring file from server...`, 'success');
+                                        logToConsole(`[Download Ready] Streaming "${fname}" to your device...`, 'success');
                                         try {
                                             const dlUrl = `/api/download-file?token=${data.downloadToken}`;
-                                            const dlRes = await fetch(dlUrl);
-                                            if (!dlRes.ok) {
-                                                const errText = await dlRes.text().catch(() => '');
-                                                throw new Error(`Server responded ${dlRes.status}: ${errText}`);
-                                            }
-                                            const blob = await dlRes.blob();
-
                                             if (activeFileHandle) {
-                                                logToConsole(`[Saved] Writing directly to selected file: "${activeFileHandle.name}"...`, 'success');
+                                                const dlRes = await fetch(dlUrl);
+                                                if (!dlRes.ok) {
+                                                    const errText = await dlRes.text().catch(() => '');
+                                                    throw new Error(`Server responded ${dlRes.status}: ${errText}`);
+                                                }
+                                                logToConsole(`[Saved] Streaming directly to selected file: "${activeFileHandle.name}"...`, 'success');
                                                 const writable = await activeFileHandle.createWritable();
-                                                await writable.write(blob);
-                                                await writable.close();
+                                                if (dlRes.body && typeof dlRes.body.pipeTo === 'function') {
+                                                    await dlRes.body.pipeTo(writable);
+                                                } else {
+                                                    const blob = await dlRes.blob();
+                                                    await writable.write(blob);
+                                                    await writable.close();
+                                                }
                                                 logToConsole(`[Saved] Successfully saved file to: "${activeFileHandle.name}"!`, 'success');
                                                 activeFileHandle = null;
                                             } else {
-                                                const blobUrl = URL.createObjectURL(blob);
                                                 const a = document.createElement('a');
-                                                a.href = blobUrl;
+                                                a.href = dlUrl;
                                                 a.download = fname;
+                                                a.style.display = 'none';
                                                 document.body.appendChild(a);
                                                 a.click();
                                                 document.body.removeChild(a);
-                                                setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                                                logToConsole(`[Saved] "${fname}" saved to your Downloads folder!`, 'success');
+                                                logToConsole(`[Saved] Browser download started for "${fname}"!`, 'success');
                                             }
                                         } catch (dlErr) {
                                             logToConsole(`[Error] Could not save file: ${dlErr.message}`, 'error');
@@ -2731,11 +3014,19 @@ document.addEventListener('DOMContentLoaded', () => {
                             } catch (e) {}
                         }
                     }
-                } else {
+                } else if (!isServerConnected) {
                     runSimulatedExecution(cmd);
+                } else {
+                    finishProgressBar(false);
+                    logToConsole(`[Error] Server returned HTTP ${response.status} while executing command.`, 'error');
                 }
             } catch (err) {
-                runSimulatedExecution(cmd);
+                if (!isServerConnected) {
+                    runSimulatedExecution(cmd);
+                } else {
+                    finishProgressBar(false);
+                    logToConsole(`[Error] Connection to server interrupted: ${err.message}`, 'error');
+                }
             } finally {
                 resetExecutionState();
             }
@@ -3080,15 +3371,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.downloadDefaultCoverThumbnail = async function() {
-        let url = document.getElementById('thumb-url')?.value.trim();
-        if (!url) {
-            const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'tags-url'];
-            for (const id of urlInputIds) {
-                const val = document.getElementById(id)?.value.trim();
-                if (val) { url = val; break; }
-            }
-        }
-        if (!url) url = lastActiveUrl;
+        const url = document.getElementById('thumb-url')?.value.trim() || getPreferredActiveUrl();
 
         const titleVal = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || 'video';
         const cleanName = sanitizeFilename(titleVal) || 'video';
@@ -3167,15 +3450,7 @@ document.addEventListener('DOMContentLoaded', () => {
             thumbTime.dispatchEvent(new Event('input'));
         }
 
-        let url = document.getElementById('thumb-url')?.value.trim();
-        if (!url) {
-            const urlInputIds = ['section-url', 'quick-url', 'multi-url', 'tags-url'];
-            for (const id of urlInputIds) {
-                const val = document.getElementById(id)?.value.trim();
-                if (val) { url = val; break; }
-            }
-        }
-        if (!url) url = lastActiveUrl;
+        const url = document.getElementById('thumb-url')?.value.trim() || getPreferredActiveUrl();
 
         const titleVal = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || 'video';
         const ytId = extractYtId(url);
@@ -3411,5 +3686,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     checkBackendHealth();
     updateSectionDurationDisplay();
+    updateActionBtnForTab();
     updateGeneratedCommand();
 });
