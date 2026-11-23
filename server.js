@@ -1243,6 +1243,52 @@ function fetchWithRedirects(targetUrl, headers = {}, maxRedirects = 5) {
 }
 
 const ytStoryboardCache = new Map();
+const ytCoverCache = new Map(); // videoId -> { url, qualityLabel, width, height, expires }
+const ytStreamCache = new Map(); // videoId -> { url, userAgent, expires }
+
+function extractYouTubeVideoId(rawUrl = '') {
+    const str = String(rawUrl || '').trim();
+    if (!str) return '';
+    // Handle /shorts/ID, /live/ID, /embed/ID, /v/ID, youtu.be/ID, and watch?...&v=ID
+    const pathMatch = str.match(/(?:youtube\.com\/(?:shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?&#\/]|$)/i);
+    if (pathMatch && pathMatch[1]) return pathMatch[1];
+    const queryMatch = str.match(/[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)/i);
+    if (queryMatch && queryMatch[1]) return queryMatch[1];
+    return '';
+}
+
+function checkImageExistsHead(imgUrl) {
+    return new Promise((resolve) => {
+        const req = https.request(imgUrl, { method: 'HEAD', timeout: 4000 }, res => {
+            resolve(res.statusCode >= 200 && res.statusCode < 300);
+        });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.end();
+    });
+}
+
+async function resolveBestYouTubeCover(videoId) {
+    const cached = ytCoverCache.get(videoId);
+    if (cached && cached.expires > Date.now()) return cached;
+
+    const candidates = [
+        { url: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`, qualityLabel: '1080p / 720p HD MaxRes', width: 1280, height: 720 },
+        { url: `https://img.youtube.com/vi/${videoId}/hq720.jpg`, qualityLabel: '720p HD Cover', width: 1280, height: 720 },
+        { url: `https://img.youtube.com/vi/${videoId}/sddefault.jpg`, qualityLabel: '480p SD Cover', width: 640, height: 480 },
+        { url: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`, qualityLabel: '360p HQ Fallback', width: 480, height: 360 }
+    ];
+
+    for (const c of candidates) {
+        const ok = await checkImageExistsHead(c.url);
+        if (ok) {
+            const entry = { ...c, expires: Date.now() + 15 * 60 * 1000 };
+            ytCoverCache.set(videoId, entry);
+            return entry;
+        }
+    }
+    return { ...candidates[3], expires: Date.now() + 60 * 1000 };
+}
 
 async function getYouTubeStoryboard(videoId) {
     if (ytStoryboardCache.has(videoId)) {
@@ -1250,11 +1296,12 @@ async function getYouTubeStoryboard(videoId) {
     }
 
     let ytdlpErr = '';
-    // 1. Try yt-dlp ios,android,web_embedded client
+    // 1. Try yt-dlp using cookie-safe client routing
     try {
         const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
         const cookiesFlag = getCookiesFlag('https://www.youtube.com');
-        const cmd = `${ytdlpBin}${cookiesFlag} --dump-json --skip-download --force-ipv4 --no-warnings --extractor-args "youtube:player_client=ios,android,web_embedded" "https://www.youtube.com/watch?v=${videoId}"`;
+        const clientArgs = getYtdlpClientArgs(Boolean(cookiesFlag));
+        const cmd = `${ytdlpBin}${cookiesFlag} --dump-json --skip-download --force-ipv4 --no-warnings${clientArgs} "https://www.youtube.com/watch?v=${videoId}"`;
         const out = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
         const data = JSON.parse(out);
         const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
@@ -1339,11 +1386,18 @@ async function getYouTubeStoryboard(videoId) {
     return sbInfo;
 }
 
-async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
+async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jpg') {
     const downloadsDir = path.join(__dirname, 'downloads');
     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
-    const outFilename = `frame_${videoId}_${targetSeconds}s.jpg`;
-    const outFilePath = path.join(downloadsDir, outFilename);
+    const imgFormat = String(format || 'jpg').toLowerCase() === 'png' ? 'png' : 'jpg';
+    const outExt = imgFormat === 'png' ? 'png' : 'jpg';
+    const outMime = imgFormat === 'png' ? 'image/png' : 'image/jpeg';
+    const ffmpegOutArgs = imgFormat === 'png'
+        ? `-vframes 1 -f image2 -c:v png pipe:1`
+        : `-vframes 1 -f image2 -c:v mjpeg -q:v 2 pipe:1`;
+    // Preserve aspect ratio at Full HD (1920x1080 landscape, 1440x1080 4:3, 1080x1920 vertical Shorts)
+    const aspectSafeScale = `scale='if(gte(iw/ih,16/9),1920,if(gte(iw/ih,1),-2,1080))':'if(gte(iw/ih,16/9),-2,if(gte(iw/ih,1),1080,1920))':flags=lanczos`;
+    const outFilename = `frame_${videoId}_${targetSeconds}s.${outExt}`;
 
     const formatSeconds = (sec) => {
         const s = Math.max(0, Math.floor(sec || 0));
@@ -1358,50 +1412,55 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
     };
     const tsFormatted = formatSeconds(targetSeconds);
 
-    // METHOD 1: Direct stream URL extraction via Android client + FFmpeg
-    // Android client is not blocked by datacenter IPs and ffmpeg captures the 100% exact video frame
-    let streamErrDetail = '';
+    // METHOD 1: Direct stream URL extraction + FFmpeg pipe:1 (with 5-min URL cache for instant multi-frame scrubbing)
     try {
-        console.log(`[Frame Extract] Attempting direct stream extraction for ${videoId} at ${tsFormatted}...`);
-        const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
-        const cookiesFlag = getCookiesFlag('https://www.youtube.com');
-        
         let streamUrl = '';
-        // Try first with cookies (if available), then without cookies
-        const attempts = [cookiesFlag, ''];
-        for (const cFlag of attempts) {
-            try {
-                const streamCmd = `${ytdlpBin}${cFlag} -g -f "18/best[height<=720]/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=${videoId}"`;
-                const streamUrlRaw = execSync(streamCmd, { encoding: 'utf8', timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-                const matched = streamUrlRaw.match(/https?:\/\/[^\r\n]+/);
-                if (matched && matched[0]) {
-                    streamUrl = matched[0];
-                    break;
-                }
-            } catch (attErr) {
-                streamErrDetail = attErr.message;
+        const cachedStream = ytStreamCache.get(videoId);
+        if (cachedStream && cachedStream.expires > Date.now()) {
+            streamUrl = cachedStream.url;
+            console.log(`[Frame Extract] Using cached stream URL for ${videoId} at ${tsFormatted}...`);
+        } else {
+            console.log(`[Frame Extract] Attempting direct stream extraction for ${videoId} at ${tsFormatted}...`);
+            const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
+            const cookiesFlag = getCookiesFlag('https://www.youtube.com');
+
+            // Android client ignores cookies; try cookieless android first, then cookie-compatible web clients if cookies exist
+            const attempts = [{ cFlag: '', clients: 'android' }];
+            if (cookiesFlag) attempts.push({ cFlag: cookiesFlag, clients: 'web_safari,web' });
+
+            for (const att of attempts) {
+                try {
+                    const streamCmd = `${ytdlpBin}${att.cFlag} -g -f "22/best[height<=720][acodec!=none]/18/best" --force-ipv4 --no-warnings --extractor-args "youtube:player_client=${att.clients}" "https://www.youtube.com/watch?v=${videoId}"`;
+                    const streamUrlRaw = execSync(streamCmd, { encoding: 'utf8', timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+                    const matched = streamUrlRaw.match(/https?:\/\/[^\r\n]+/);
+                    if (matched && matched[0]) {
+                        streamUrl = matched[0];
+                        ytStreamCache.set(videoId, { url: streamUrl, expires: Date.now() + 5 * 60 * 1000 });
+                        break;
+                    }
+                } catch (attErr) {}
             }
         }
 
         if (streamUrl && streamUrl.startsWith('http')) {
-            console.log(`[Frame Extract] Stream URL acquired, extracting exact frame with FFmpeg at ${tsFormatted}...`);
-            const ffmpegCmd = `ffmpeg -y -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -ss ${tsFormatted} -i "${streamUrl}" -vframes 1 -vf "scale=1920:1080:flags=lanczos,unsharp=5:5:0.8:5:5:0.0" -q:v 2 "${outFilePath}"`;
-            execSync(ffmpegCmd, { timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] });
+            console.log(`[Frame Extract] Extracting exact ${outExt.toUpperCase()} frame at ${tsFormatted}...`);
+            const ffmpegCmd = `ffmpeg -y -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" -ss ${tsFormatted} -i "${streamUrl}" -vf "${aspectSafeScale},unsharp=5:5:0.8:5:5:0.0" ${ffmpegOutArgs}`;
+            const frameBuf = execSync(ffmpegCmd, { maxBuffer: 25 * 1024 * 1024, timeout: 25000, stdio: ['pipe', 'pipe', 'pipe'] });
 
-            if (fs.existsSync(outFilePath) && fs.statSync(outFilePath).size > 1000) {
-                console.log(`[Frame Extract Success] Exact direct frame generated: ${fs.statSync(outFilePath).size} bytes`);
-                const base64Data = fs.readFileSync(outFilePath).toString('base64');
-                try { fs.unlinkSync(outFilePath); } catch (e) {}
+            if (frameBuf && frameBuf.length > 1000) {
+                console.log(`[Frame Extract Success] Direct frame generated (${outExt.toUpperCase()}): ${frameBuf.length} bytes`);
                 return {
                     filename: outFilename,
-                    base64Url: `data:image/jpeg;base64,${base64Data}`,
-                    width: 1920,
-                    height: 1080
+                    base64Url: `data:${outMime};base64,${frameBuf.toString('base64')}`,
+                    source: 'direct-stream',
+                    qualityLabel: `Direct Video Stream (${outExt.toUpperCase()})`,
+                    ext: outExt
                 };
             }
         }
     } catch (streamErr) {
-        streamErrDetail = streamErr.message;
+        // Evict cache entry in case signed URL expired
+        ytStreamCache.delete(videoId);
         console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
     }
 
@@ -1494,32 +1553,29 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         const tempSheet = path.join(downloadsDir, `temp_sb_${videoId}_${Date.now()}${sheetExt}`);
         fs.writeFileSync(tempSheet, sheetData.buf);
 
-        // Crop exact frame and upscale directly to 1080p Full HD memory buffer via FFmpeg pipe:1
-        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},scale=1920:1080:flags=lanczos" -vframes 1 -f image2 -c:v mjpeg pipe:1`;
-        let jpegBuf;
+        // Crop exact frame and upscale preserving source aspect ratio via FFmpeg pipe:1
+        const cmd = `ffmpeg -y -i "${tempSheet}" -vf "crop=${cellW}:${cellH}:${cropX}:${cropY},${aspectSafeScale}" ${ffmpegOutArgs}`;
+        let frameBuf;
         try {
-            jpegBuf = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, windowsHide: true });
+            frameBuf = execSync(cmd, { maxBuffer: 25 * 1024 * 1024, windowsHide: true });
         } catch (pipeErr) {
             console.error(`[FFmpeg Crop Error]: ${pipeErr.message}`);
             throw new Error(`FFmpeg crop failed: ${pipeErr.message}`);
         }
 
-        if (!jpegBuf || jpegBuf.length < 500) {
+        if (!frameBuf || frameBuf.length < 500) {
             throw new Error('FFmpeg generated invalid or empty image buffer');
         }
 
-        try { fs.writeFileSync(outFilePath, jpegBuf); } catch (e) {}
-
-        const base64Data = jpegBuf.toString('base64');
         return {
             filename: outFilename,
-            base64Url: `data:image/jpeg;base64,${base64Data}`,
-            width: 1920,
-            height: 1080
+            base64Url: `data:${outMime};base64,${frameBuf.toString('base64')}`,
+            source: 'storyboard',
+            qualityLabel: `Storyboard Frame (${cellW}x${cellH} -> Full HD ${outExt.toUpperCase()})`,
+            ext: outExt
         };
     } finally {
         try {
-            if (fs.existsSync(outFilePath)) fs.unlinkSync(outFilePath);
             const files = fs.readdirSync(downloadsDir);
             for (const f of files) {
                 if (f.startsWith(`temp_sb_${videoId}_`)) {
@@ -1536,33 +1592,32 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
             try {
-                const { url, timestamp, title } = JSON.parse(body);
+                const { url, timestamp, title, format } = JSON.parse(body);
                 if (!url) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ success: false, error: 'URL required' }));
                 }
 
-                console.log(`[Server Fetching Thumbnail]: ${url} (timestamp: ${timestamp || 'default cover'})`);
+                const outExt = String(format || 'jpg').toLowerCase() === 'png' ? 'png' : 'jpg';
+                console.log(`[Server Fetching Thumbnail]: ${url} (timestamp: ${timestamp || 'default cover'}, format: ${outExt})`);
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
                 const isTwitch = url.toLowerCase().includes('twitch.tv');
                 const isKick = url.toLowerCase().includes('kick.com');
 
-                // 1. YouTube: Instant direct public CDN image or exact timestamp storyboard extraction
+                // 1. YouTube: Resolved highest existing cover OR exact timestamp frame extraction
                 if (isYouTube) {
-                    const ytMatch = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i);
-                    const ytId = ytMatch ? ytMatch[1] : '';
+                    const ytId = extractYouTubeVideoId(url);
                     if (!ytId) {
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         return res.end(JSON.stringify({ success: false, error: 'Could not parse YouTube video ID' }));
                     }
 
                     const sec = parseTimestampToSeconds(timestamp);
-                    const cleanTitle = title ? title.replace(/[^A-Za-z0-9_-]+/g, '_') : ytId;
+                    const cleanTitle = title ? title.replace(/[^A-Za-z0-9_$-]+/g, '_').replace(/\$/g, '_') : ytId;
 
-                    // If a specific timestamp is requested (> 0 seconds), extract the exact video frame from YouTube storyboard
                     if (sec > 0) {
                         try {
-                            const frameData = await extractYouTubeTimestampFrame(ytId, sec);
+                            const frameData = await extractYouTubeTimestampFrame(ytId, sec, outExt);
                             if (frameData && frameData.base64Url) {
                                 res.writeHead(200, { 'Content-Type': 'application/json' });
                                 return res.end(JSON.stringify({
@@ -1570,45 +1625,49 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds) {
                                     platform: 'youtube',
                                     id: ytId,
                                     isFrame: true,
+                                    source: frameData.source,
+                                    qualityLabel: frameData.qualityLabel,
+                                    ext: frameData.ext,
                                     thumbnailUrl: frameData.base64Url,
                                     downloadUrl: frameData.base64Url,
                                     timestamp: timestamp,
-                                    filename: `${cleanTitle}_frame_${String(timestamp).replace(/:/g, '-')}.jpg`
+                                    filename: `${cleanTitle}_frame_${String(timestamp).replace(/:/g, '-')}.${frameData.ext}`
                                 }));
                             }
                         } catch (err) {
-                            console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to official 1080p cover.`);
-                            const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-                            const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                            console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to best official cover.`);
+                            const bestCover = await resolveBestYouTubeCover(ytId);
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             return res.end(JSON.stringify({
                                 success: true,
                                 platform: 'youtube',
                                 id: ytId,
                                 isFrame: false,
-                                thumbnailUrl: maxRes,
-                                downloadUrl: maxRes,
-                                fallbackUrl: hqRes,
+                                source: 'cover',
+                                qualityLabel: bestCover.qualityLabel,
+                                thumbnailUrl: bestCover.url,
+                                downloadUrl: bestCover.url,
+                                fallbackUrl: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
                                 timestamp: '00:00:00',
-                                filename: `${cleanTitle}_default_cover_1080p.jpg`,
-                                errorNotice: `Timeline frame extraction error: ${err.message}. Loaded official 1080p HD default cover.`
+                                filename: `${cleanTitle}_default_cover.jpg`,
+                                errorNotice: `Timeline frame extraction error: ${err.message}. Loaded ${bestCover.qualityLabel}.`
                             }));
                         }
                     }
 
-                    // Default official video cover thumbnail (Full HD/4K)
-                    const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-                    const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-
+                    // Default official video cover thumbnail (verified highest existing resolution)
+                    const bestCover = await resolveBestYouTubeCover(ytId);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({
                         success: true,
                         platform: 'youtube',
                         id: ytId,
                         isFrame: false,
-                        thumbnailUrl: maxRes,
-                        downloadUrl: maxRes,
-                        fallbackUrl: hqRes,
+                        source: 'cover',
+                        qualityLabel: bestCover.qualityLabel,
+                        thumbnailUrl: bestCover.url,
+                        downloadUrl: bestCover.url,
+                        fallbackUrl: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
                         timestamp: '00:00:00',
                         filename: `${cleanTitle}_default_cover.jpg`
                     }));

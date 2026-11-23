@@ -1479,14 +1479,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const url = document.getElementById('thumb-url').value.trim() || '<VIDEO_URL>';
                 const titleVal = document.getElementById('thumb-title')?.value.trim();
                 const timeVal = document.getElementById('thumb-timestamp')?.value.trim();
+                const fmtExt = document.getElementById('thumb-format')?.value === 'png' ? 'png' : 'jpg';
                 const outName = titleVal ? sanitizeFilename(titleVal) : '%(title)s';
                 const ytId = extractYtId(url);
                 if (ytId && !timeVal) {
-                    cmd = `curl -o "downloads/${outName}.jpg" "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg"`;
+                    cmd = `curl -L -o "downloads/${outName}.jpg" "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg"`;
                 } else if (timeVal) {
-                    cmd = `ffmpeg -ss ${timeVal} -i "$(yt-dlp -g '${url}')" -frames:v 1 -y "downloads/${outName}_${timeVal.replace(/:/g, '-')}.jpg"`;
+                    cmd = `yt-dlp --js-runtimes node -g -f "22/best[height<=720]/18/best" "${url}" | xargs -I {} ffmpeg -y -ss ${timeVal} -i "{}" -frames:v 1 "downloads/${outName}_${timeVal.replace(/:/g, '-')}.${fmtExt}"`;
                 } else {
-                    cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails jpg -o "downloads/${outName}" "${url}"`;
+                    cmd = `yt-dlp --skip-download --write-thumbnail --convert-thumbnails ${fmtExt} -o "downloads/${outName}" "${url}"`;
                 }
                 break;
             }
@@ -2095,16 +2096,20 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>${isDefaultZero ? 'Saving Cover...' : `Extracting Frame at ${timeStr}...`}</span>`;
         }
 
-        const showCapturedPreview = (thumbUrl, filename, capturedTime, isFrame = true) => {
+        const showCapturedPreview = (thumbUrl, filename, capturedTime, isFrame = true, meta = {}) => {
             const displayTime = capturedTime || timeStr || '00:00:00';
             const isCover = !isFrame || displayTime === '00:00:00';
+            const outFormat = meta.ext || (document.getElementById('thumb-format')?.value === 'png' ? 'png' : 'jpg');
             lastCapturedThumbData = {
                 success: true,
                 thumbnailUrl: thumbUrl,
                 downloadUrl: thumbUrl,
                 isFrame: !isCover,
+                source: meta.source || (isCover ? 'cover' : 'direct-stream'),
+                qualityLabel: meta.qualityLabel || '',
+                ext: outFormat,
                 timestamp: displayTime,
-                filename: filename || (isCover ? 'default_cover_1080p.jpg' : `thumbnail_${displayTime.replace(/:/g, '-')}.jpg`)
+                filename: filename || (isCover ? 'default_cover_1080p.jpg' : `thumbnail_${displayTime.replace(/:/g, '-')}.${outFormat}`)
             };
 
             const card = document.getElementById('captured-thumbnail-card');
@@ -2113,22 +2118,39 @@ document.addEventListener('DOMContentLoaded', () => {
             const overlay = document.getElementById('captured-thumb-timestamp-overlay');
             const bannerText = document.getElementById('captured-thumb-banner-text');
 
-            if (img) {
-                img.onerror = function() {
-                    const ytId = extractYtId(activeUrl);
-                    if (ytId && !this.src.includes('hqdefault')) {
-                        this.src = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+            const applyYtImgFallback = (imgEl) => {
+                const ytId = extractYtId(activeUrl);
+                if (!ytId) return;
+                imgEl.onerror = function() {
+                    let nextSrc = '';
+                    if (this.src.includes('maxresdefault.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/hq720.jpg`;
+                    else if (this.src.includes('hq720.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/sddefault.jpg`;
+                    else if (this.src.includes('sddefault.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                    if (nextSrc) {
+                        this.src = nextSrc;
+                        if (lastCapturedThumbData && isCover) {
+                            lastCapturedThumbData.thumbnailUrl = nextSrc;
+                            lastCapturedThumbData.downloadUrl = nextSrc;
+                        }
                     }
                 };
+            };
+
+            if (img) {
+                applyYtImgFallback(img);
                 img.src = thumbUrl;
             }
-            if (label) label.textContent = isCover ? 'Default Cover (1080p HD)' : `Frame at ${displayTime}`;
-            if (overlay) overlay.textContent = isCover ? '1080p HD' : displayTime;
+            if (label) label.textContent = isCover ? `Default Cover (${meta.qualityLabel || 'HD'})` : `Frame at ${displayTime}`;
+            if (overlay) overlay.textContent = isCover ? (meta.qualityLabel || 'HD Cover') : displayTime;
             if (bannerText) {
                 if (isCover) {
-                    bannerText.innerHTML = '✨ <strong>Official Cover (1080p Full HD / 4K)</strong> loaded directly from video CDN in maximum quality.';
+                    bannerText.innerHTML = meta.errorNotice
+                        ? `⚠️ ${escapeHtml(meta.errorNotice)}`
+                        : `✨ <strong>Official Cover (${escapeHtml(meta.qualityLabel || '1080p Full HD')})</strong> loaded directly from video CDN in maximum quality.`;
+                } else if (meta.source === 'direct-stream') {
+                    bannerText.innerHTML = `✨ <strong>Direct Video Stream Frame (${escapeHtml(meta.qualityLabel || outFormat.toUpperCase())})</strong> extracted at <strong>${displayTime}</strong>.`;
                 } else {
-                    bannerText.innerHTML = `⚠️ Note: Timeline frame extracted at <strong>${displayTime}</strong> (~320p-720p). For crystal-clear <strong>1080p Full HD</strong>, click <strong>Download Default Cover (1080p HD)</strong> below.`;
+                    bannerText.innerHTML = `⚡ <strong>${escapeHtml(meta.qualityLabel || 'Timeline Storyboard Upscaled to 1080p')}</strong> extracted at <strong>${displayTime}</strong>.`;
                 }
             }
             if (card) {
@@ -2142,49 +2164,56 @@ document.addEventListener('DOMContentLoaded', () => {
             if (thumbTimeInput) thumbTimeInput.value = isCover ? '' : displayTime;
             const thumbImg = document.getElementById('thumb-preview-img');
             if (thumbImg) {
-                thumbImg.onerror = function() {
-                    const ytId = extractYtId(activeUrl);
-                    if (ytId && !this.src.includes('hqdefault')) {
-                        this.src = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-                    }
-                };
+                applyYtImgFallback(thumbImg);
                 thumbImg.src = thumbUrl;
             }
             const thumbCard = document.getElementById('thumbnail-preview-card');
             if (thumbCard) thumbCard.classList.remove('hidden');
         };
 
-        // If player is at 00:00:00 (default), directly fetch official high-resolution default cover
+        const chosenFormat = document.getElementById('thumb-format')?.value === 'png' ? 'png' : 'jpg';
+
+        // If player is at 00:00:00 (default), resolve official high-resolution default cover via backend
         if (isDefaultZero) {
-            logToConsole('[Thumbnail] Player at 00:00:00 (default) - Grabbing official 1080p Full HD default cover...', 'info');
+            logToConsole('[Thumbnail] Player at 00:00:00 (default) - Fetching highest-resolution official cover...', 'info');
+            try {
+                const res = await fetch('/api/fetch-thumbnail', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: activeUrl, timestamp: '', title: titleVal, format: chosenFormat })
+                });
+                const data = await res.json();
+                if (data && data.success && data.thumbnailUrl) {
+                    showCapturedPreview(data.thumbnailUrl, data.filename, '00:00:00', false, data);
+                    if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
+                    logToConsole(`[Thumbnail Captured] Loaded official ${data.qualityLabel || 'HD'} cover!`, 'success');
+                    return;
+                }
+            } catch (e) {}
             const ytId = extractYtId(activeUrl);
             if (ytId) {
                 const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-                showCapturedPreview(maxRes, `${sanitizeFilename(titleVal) || ytId}_default_cover_1080p.jpg`, '00:00:00', false);
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = origHtml;
-                }
-                logToConsole(`[Thumbnail Captured] Loaded official 1080p Full HD cover for ${ytId}!`, 'success');
+                showCapturedPreview(maxRes, `${sanitizeFilename(titleVal) || ytId}_default_cover.jpg`, '00:00:00', false);
+                if (btn) { btn.disabled = false; btn.innerHTML = origHtml; }
                 return;
             }
         }
 
-        logToConsole(`[Thumbnail] Extracting HD frame snapshot at ${timeStr}...`, 'system');
+        logToConsole(`[Thumbnail] Extracting ${chosenFormat.toUpperCase()} frame snapshot at ${timeStr}...`, 'system');
 
         try {
             const res = await fetch('/api/fetch-thumbnail', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: activeUrl, timestamp: timeStr, title: titleVal })
+                body: JSON.stringify({ url: activeUrl, timestamp: timeStr, title: titleVal, format: chosenFormat })
             });
             const data = await res.json();
             if (data && data.success && data.thumbnailUrl) {
-                showCapturedPreview(data.thumbnailUrl, data.filename, timeStr, data.isFrame !== false);
+                showCapturedPreview(data.thumbnailUrl, data.filename, data.timestamp || timeStr, data.isFrame !== false, data);
                 if (data.isFrame) {
-                    logToConsole(`[Thumbnail Captured] Extracted HD video frame at ${timeStr}! Ready to download.`, 'success');
+                    logToConsole(`[Thumbnail Captured] Extracted ${data.qualityLabel || 'HD'} frame at ${timeStr}! Ready to download.`, 'success');
                 } else {
-                    logToConsole(`[Thumbnail Notice] YouTube cloud IP protection active — loaded official 1080p Full HD cover!`, 'info');
+                    logToConsole(`[Thumbnail Notice] ${data.errorNotice || 'Loaded official high-resolution cover!'}`, 'system');
                 }
             } else {
                 throw new Error(data?.error || 'Could not extract frame at timestamp');
@@ -2445,9 +2474,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- YouTube Video ID Helper ---
     function extractYtId(url) {
-        const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-        const match = url.match(regExp);
-        return (match && match[2].length === 11) ? match[2] : null;
+        if (!url) return null;
+        const pathMatch = url.match(/(?:youtube\.com\/(?:shorts\/|live\/|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?:[?&#\/]|$)/i);
+        if (pathMatch && pathMatch[1]) return pathMatch[1];
+        const queryMatch = url.match(/[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)/i);
+        return (queryMatch && queryMatch[1]) ? queryMatch[1] : null;
     }
 
     // --- Live Download Progress Bar Handlers ---
@@ -2704,12 +2735,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                logToConsole(`[Thumbnail] Fetching thumbnail / frame snapshot for ${url}${timeVal ? ` at ${timeVal}` : ''}...`, 'system');
+                const chosenFormat = document.getElementById('thumb-format')?.value === 'png' ? 'png' : 'jpg';
+                logToConsole(`[Thumbnail] Fetching thumbnail / frame snapshot for ${url}${timeVal ? ` at ${timeVal} (${chosenFormat.toUpperCase()})` : ''}...`, 'system');
                 try {
                     const res = await fetch('/api/fetch-thumbnail', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, timestamp: timeVal, title: titleVal })
+                        body: JSON.stringify({ url, timestamp: timeVal, title: titleVal, format: chosenFormat })
                     });
                     const data = await res.json();
                     if (data && data.success && data.thumbnailUrl) {
@@ -2720,20 +2752,37 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         if (thumbnailPreviewCard) thumbnailPreviewCard.classList.remove('hidden');
 
-                        // Also update player bottom captured card if visible
                         const capturedImg = document.getElementById('captured-thumb-img');
                         const capturedCard = document.getElementById('captured-thumbnail-card');
                         const capturedLabel = document.getElementById('captured-thumb-time-label');
                         const capturedOverlay = document.getElementById('captured-thumb-timestamp-overlay');
+                        const bannerText = document.getElementById('captured-thumb-banner-text');
                         if (capturedImg) {
                             capturedImg.onerror = null;
                             capturedImg.src = data.thumbnailUrl;
                         }
-                        if (capturedLabel) capturedLabel.textContent = data.isFrame ? `Frame at ${data.timestamp || timeVal}` : 'Default Cover (1080p HD)';
-                        if (capturedOverlay) capturedOverlay.textContent = data.isFrame ? (data.timestamp || timeVal) : '1080p HD';
+                        if (capturedLabel) capturedLabel.textContent = data.isFrame ? `Frame at ${data.timestamp || timeVal}` : `Default Cover (${data.qualityLabel || 'HD'})`;
+                        if (capturedOverlay) capturedOverlay.textContent = data.isFrame ? (data.timestamp || timeVal) : (data.qualityLabel || 'HD Cover');
+                        if (bannerText) {
+                            if (data.isFrame) {
+                                bannerText.innerHTML = data.source === 'direct-stream'
+                                    ? `✨ <strong>Direct Video Stream Frame (${escapeHtml(data.qualityLabel || chosenFormat.toUpperCase())})</strong> extracted at <strong>${data.timestamp || timeVal}</strong>.`
+                                    : `⚡ <strong>${escapeHtml(data.qualityLabel || 'Timeline Storyboard Upscaled')}</strong> extracted at <strong>${data.timestamp || timeVal}</strong>.`;
+                            } else {
+                                bannerText.innerHTML = data.errorNotice
+                                    ? `⚠️ ${escapeHtml(data.errorNotice)}`
+                                    : `✨ <strong>Official Cover (${escapeHtml(data.qualityLabel || '1080p Full HD')})</strong> loaded directly from CDN.`;
+                            }
+                        }
                         if (capturedCard) capturedCard.classList.remove('hidden');
 
-                        logToConsole(`[Success] ${data.isFrame ? `Extracted exact frame at ${data.timestamp || timeVal}!` : 'High-resolution thumbnail loaded!'} Ready to download.`, 'success');
+                        if (data.isFrame) {
+                            logToConsole(`[Success] Extracted ${data.qualityLabel || 'HD'} frame at ${data.timestamp || timeVal}! Ready to download.`, 'success');
+                        } else if (data.errorNotice) {
+                            logToConsole(`[Thumbnail Notice] ${data.errorNotice}`, 'system');
+                        } else {
+                            logToConsole(`[Success] Official ${data.qualityLabel || 'high-resolution'} thumbnail loaded! Ready to download.`, 'success');
+                        }
                     } else {
                         logToConsole(`[Thumbnail Error] ${data?.error || 'Failed to fetch thumbnail'}`, 'error');
                     }
@@ -3340,6 +3389,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.downloadThumbnailImage = async function() {
+        const chosenFormat = document.getElementById('thumb-format')?.value === 'png' ? 'png' : 'jpg';
         // 1. Determine the target timestamp
         let timeVal = document.getElementById('thumb-timestamp')?.value.trim();
         const playerSec = getPlayerCurrentTime();
@@ -3356,13 +3406,13 @@ document.addEventListener('DOMContentLoaded', () => {
             return downloadDefaultCoverThumbnail();
         }
 
-        // 3. If we ALREADY have a captured frame in memory for this EXACT requested timestamp, download it directly!
-        if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl && lastCapturedThumbData.isFrame && lastCapturedThumbData.timestamp === timeVal) {
+        // 3. If we ALREADY have a captured frame in memory for this EXACT requested timestamp + format, download it directly!
+        if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl && lastCapturedThumbData.isFrame && lastCapturedThumbData.timestamp === timeVal && (!lastCapturedThumbData.ext || lastCapturedThumbData.ext === chosenFormat)) {
             return downloadCapturedThumbnail();
         }
 
         // 4. Otherwise, trigger frame capture at this timestamp right now and then download it!
-        logToConsole(`[Thumbnail] Capturing exact frame at ${timeVal}...`, 'system');
+        logToConsole(`[Thumbnail] Capturing exact frame at ${timeVal} (${chosenFormat.toUpperCase()})...`, 'system');
         await captureThumbnailFromPlayer(timeVal);
         if (lastCapturedThumbData && lastCapturedThumbData.thumbnailUrl) {
             return downloadCapturedThumbnail();
@@ -3384,12 +3434,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const ytId = extractYtId(url);
         if (ytId) {
-            const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-            const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-            logToConsole(`[Thumbnail] Downloading official 1080p Full HD cover for ${ytId}...`, 'system');
+            const coverUrls = [
+                `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`,
+                `https://img.youtube.com/vi/${ytId}/hq720.jpg`,
+                `https://img.youtube.com/vi/${ytId}/sddefault.jpg`,
+                `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`
+            ];
+            logToConsole(`[Thumbnail] Downloading highest available official cover for ${ytId}...`, 'system');
             try {
-                let res = await fetch(maxRes);
-                if (!res.ok) res = await fetch(hqRes);
+                let res = null;
+                for (const cu of coverUrls) {
+                    const candidate = await fetch(cu);
+                    if (candidate.ok) {
+                        res = candidate;
+                        break;
+                    }
+                }
+                if (!res) throw new Error('No YouTube cover image returned HTTP 200');
                 const blob = await res.blob();
                 const blobUrl = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -3399,17 +3460,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 a.click();
                 document.body.removeChild(a);
                 setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                logToConsole(`[Thumbnail Downloaded] Saved official 1080p HD default cover "${filename}" (${Math.round(blob.size / 1024)} KB)!`, 'success');
+                logToConsole(`[Thumbnail Downloaded] Saved official cover "${filename}" (${Math.round(blob.size / 1024)} KB)!`, 'success');
                 return;
             } catch (e) {
                 const a = document.createElement('a');
-                a.href = maxRes;
+                a.href = coverUrls[0];
                 a.target = '_blank';
                 a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-                logToConsole(`[Thumbnail] Direct download initiated for 1080p default cover.`, 'info');
+                logToConsole(`[Thumbnail] Direct download initiated for default cover.`, 'info');
                 return;
             }
         }
@@ -3456,10 +3517,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const ytId = extractYtId(url);
         if (ytId) {
             const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
-            const hqRes = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
             const thumbImg = document.getElementById('thumb-preview-img');
             if (thumbImg) {
-                thumbImg.onerror = function() { this.src = hqRes; };
+                thumbImg.onerror = function() {
+                    let next = '';
+                    if (this.src.includes('maxresdefault.jpg')) next = `https://img.youtube.com/vi/${ytId}/hq720.jpg`;
+                    else if (this.src.includes('hq720.jpg')) next = `https://img.youtube.com/vi/${ytId}/sddefault.jpg`;
+                    else if (this.src.includes('sddefault.jpg')) next = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+                    if (next) {
+                        this.src = next;
+                        if (lastCapturedThumbData) {
+                            lastCapturedThumbData.thumbnailUrl = next;
+                            lastCapturedThumbData.downloadUrl = next;
+                        }
+                    }
+                };
                 thumbImg.src = maxRes;
             }
             const thumbCard = document.getElementById('thumbnail-preview-card');
@@ -3474,7 +3546,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 timestamp: '00:00:00',
                 filename: `${sanitizeFilename(titleVal) || ytId}_default_cover_1080p.jpg`
             };
-            logToConsole('[Thumbnail] Reverted to official 1080p Full HD default cover.', 'success');
+            logToConsole('[Thumbnail] Reverted to official high-resolution default cover.', 'success');
             updateGeneratedCommand();
             return;
         }

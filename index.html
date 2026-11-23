@@ -650,16 +650,27 @@
                             <span class="field-hint margin-top-xs"><i class="fa-solid fa-circle-info"></i> Leave blank or click <strong>Default Cover</strong> for crystal-clear HD video cover, or scrub player & click <strong>From Player</strong>.</span>
                         </div>
 
-                        <div class="form-group">
-                            <div class="label-with-val">
-                                <label for="thumb-title"><i class="fa-solid fa-heading"></i> Output Filename / Title</label>
-                                <span class="fetch-status-badge" id="thumb-title-status"></span>
+                        <div class="form-row">
+                            <div class="form-group flex-1">
+                                <div class="label-with-val">
+                                    <label for="thumb-title"><i class="fa-solid fa-heading"></i> Output Filename / Title</label>
+                                    <span class="fetch-status-badge" id="thumb-title-status"></span>
+                                </div>
+                                <div class="input-wrapper">
+                                    <input type="text" id="thumb-title" placeholder="Write title (or paste link to auto-fill)...">
+                                    <button type="button" class="btn-fetch-title" title="Auto-fetch Title from Link" onclick="fetchTitleForField('thumb-url', 'thumb-title', 'thumb-title-status')">
+                                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                    </button>
+                                </div>
                             </div>
-                            <div class="input-wrapper">
-                                <input type="text" id="thumb-title" placeholder="Write title (or paste link to auto-fill)...">
-                                <button type="button" class="btn-fetch-title" title="Auto-fetch Title from Link" onclick="fetchTitleForField('thumb-url', 'thumb-title', 'thumb-title-status')">
-                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
-                                </button>
+                            <div class="form-group" style="width: 145px; flex-shrink: 0;">
+                                <label for="thumb-format"><i class="fa-regular fa-file-image"></i> Export Format</label>
+                                <div class="select-wrapper">
+                                    <select id="thumb-format">
+                                        <option value="jpg" selected>JPG (Fast HD)</option>
+                                        <option value="png">PNG (Lossless)</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
 
@@ -673,7 +684,7 @@
                                     <i class="fa-regular fa-image"></i> Default Cover (1080p HD)
                                 </button>
                                 <button type="button" class="btn btn-secondary btn-sm" id="thumb-download-btn" onclick="downloadThumbnailImage()" title="Download current frame preview (or default cover if 00:00:00)">
-                                    <i class="fa-solid fa-download"></i> Download Frame JPG
+                                    <i class="fa-solid fa-download"></i> Download Frame
                                 </button>
                             </div>
                         </div>
@@ -1043,6 +1054,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=3.5"></script>
+    <script src="app.js?v=3.6"></script>
 </body>
 </html>
