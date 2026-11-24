@@ -2225,6 +2225,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     logToConsole(`[Thumbnail Captured] Extracted ${data.qualityLabel || 'HD'} frame at ${timeStr}! Ready to download.`, 'success');
                 } else {
                     logToConsole(`[Thumbnail Notice] ${data.errorNotice || 'Loaded official high-resolution cover!'}`, 'system');
+                    if (data.botBlocked) updateCookieStatus();
                 }
                 return data;
             } else {
@@ -3621,6 +3622,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (navBtn) { navBtn.className = 'cookie-status-btn inactive'; }
                     if (modalStatus) modalStatus.innerHTML = '<span style="color: #f59e0b;">Disabled / Cleared</span>';
                     if (modalBytes) modalBytes.textContent = '0 bytes';
+                } else if (data.hasCookies && data.rejected) {
+                    if (navLabel) navLabel.textContent = 'Cookies Expired';
+                    if (navBtn) { navBtn.className = 'cookie-status-btn inactive'; }
+                    if (modalStatus) modalStatus.innerHTML = `<span style="color: #ef4444;">Rejected by YouTube (${data.lineCount || 'multiple'} cookies need refresh)</span>`;
+                    if (modalBytes) modalBytes.textContent = `${(data.size / 1024).toFixed(1)} KB`;
                 } else if (data.hasCookies) {
                     if (navLabel) navLabel.textContent = 'Cookies Active';
                     if (navBtn) { navBtn.className = 'cookie-status-btn active'; }

@@ -1025,6 +1025,7 @@
             <div class="modal-body">
                 <div class="cookie-modal-info-box" style="margin-bottom: 12px; font-size: 13px; line-height: 1.5; color: var(--text-secondary);">
                     <p style="margin-bottom: 8px;">YouTube challenges cloud/datacenter IPs (Render, AWS) with bot verification. If downloads or frames fail with <em>"Sign in to confirm you're not a bot"</em>, paste fresh cookies here.</p>
+                    <p style="margin-bottom: 8px; font-size: 11.5px; color: var(--text-muted);"><strong>Persistence tip:</strong> Pasting here updates the running server immediately until Render sleeps or redeploys (~15 min idle on free tier). To remember across restarts, save them in Render Dashboard &rarr; Environment &rarr; <code>YOUTUBE_COOKIES</code> (export from a fresh incognito window using a secondary account so cookies stay valid longer).</p>
                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--bg-input); border-radius: 6px; font-size: 12px;">
                         <span>Current Status: <strong id="modal-cookie-status-text">Checking...</strong></span>
                         <span id="modal-cookie-bytes" class="text-muted">--</span>
@@ -1054,6 +1055,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=3.7"></script>
+    <script src="app.js?v=3.8"></script>
 </body>
 </html>

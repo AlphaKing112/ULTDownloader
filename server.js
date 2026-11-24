@@ -21,6 +21,7 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 }
 
 let cookiesDisabled = false;
+let cookiesRejectedByYouTube = false;
 
 // Initialize cookies on startup once from environment variable if cookies.txt does not exist
 const initialCookiesPath = path.join(__dirname, 'cookies.txt');
@@ -847,7 +848,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                 console.log(`[Frame Extract] Attempting async direct stream extraction for ${videoId} at ${tsFormatted}...`);
                 const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
                 const attempts = hasCookies
-                    ? [{ useCookies: true, clients: 'web_safari,mweb,web' }, { useCookies: false, clients: 'android' }]
+                    ? [{ useCookies: true, clients: 'web_safari,mweb' }, { useCookies: false, clients: 'android' }]
                     : [{ useCookies: false, clients: 'android' }];
 
                 for (const att of attempts) {
@@ -863,13 +864,17 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                         const matched = (stdout || '').trim().match(/https?:\/\/[^\r\n]+/);
                         if (matched && matched[0]) {
                             streamUrl = matched[0];
+                            if (att.useCookies) cookiesRejectedByYouTube = false;
                             ytStreamCache.set(videoId, { url: streamUrl, expires: Date.now() + 5 * 60 * 1000 });
                             break;
                         }
                     } catch (attErr) {
                         const msg = (attErr.stderr ? attErr.stderr.toString() : attErr.message) || '';
-                        if (msg.includes('not a bot') || msg.includes('cookies are no longer valid')) {
+                        const firstErrLine = msg.split(/[\r\n]+/).filter(Boolean).slice(-1)[0] || msg.slice(0, 220);
+                        console.warn(`[Frame Extract Attempt Failed] (${att.useCookies ? 'with-cookies' : 'cookieless'}: ${att.clients}): ${firstErrLine}`);
+                        if (/not a bot|Sign in to confirm|cookies are no longer valid/i.test(msg)) {
                             hitBotWall = true;
+                            if (att.useCookies) cookiesRejectedByYouTube = true;
                         }
                     }
                 }
@@ -901,7 +906,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
             console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
         }
 
-        const sb = await getYouTubeStoryboard(videoId, { skipYtdlp: hitBotWall && !hasCookies });
+        const sb = await getYouTubeStoryboard(videoId, { skipYtdlp: hitBotWall });
 
         let sheetUrl = '';
         let cropX = 0;
@@ -1408,6 +1413,7 @@ const server = http.createServer((req, res) => {
                         }
 
                         if (hasInvalidCookies) {
+                            cookiesRejectedByYouTube = true;
                             try {
                                 const cookiesPath = path.join(__dirname, 'cookies.txt');
                                 if (fs.existsSync(cookiesPath)) {
@@ -1419,6 +1425,7 @@ const server = http.createServer((req, res) => {
 
                         // Auto-retry once without cookies (using android/ios client) if cookie-authenticated YT attempt hit bot/cookie rejection
                         if (code !== 0 && allowCookieRetry && isYT && cmdToRun.includes('--cookies') && (hasInvalidCookies || sawBotOrFormatError)) {
+                            cookiesRejectedByYouTube = true;
                             cleanupJobDir();
                             if (jobDir && !fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
                             const cookielessCmd = injectYtdlpFlags(baseCommand, { cookiesFlag: '', isYT, isKick });
@@ -1454,6 +1461,9 @@ const server = http.createServer((req, res) => {
                         };
 
                         const finishResponse = (finalCode) => {
+                            if (finalCode === 0 && isYT && cmdToRun.includes('--cookies')) {
+                                cookiesRejectedByYouTube = false;
+                            }
                             let outputFile = null;
                             if (finalCode === 0) {
                                 try {
@@ -1711,10 +1721,13 @@ const server = http.createServer((req, res) => {
                             }
                         } catch (err) {
                             console.error(`[Server Storyboard Extract Error]: ${err.message}. Falling back to best official cover.`);
-                            const isBotBlock = err.message.includes('bot') || err.message.includes('Skipped duplicate yt-dlp');
+                            const isBotBlock = /not a bot|Sign in to confirm|cookies are no longer valid|Skipped duplicate yt-dlp/i.test(err.message);
+                            const hasCookies = Boolean(getCookiesFlag('https://www.youtube.com'));
                             const bestCover = await resolveBestYouTubeCover(ytId);
                             const friendlyMsg = isBotBlock
-                                ? `YouTube blocked this cloud IP ("Sign in to confirm you're not a bot"). Click Cookies (top right) to upload fresh cookies, then try again. Showing ${bestCover.qualityLabel}.`
+                                ? (hasCookies
+                                    ? `YouTube rejected the loaded cookies on this cloud IP ("Sign in to confirm you're not a bot"). Click Cookies (top right) to upload fresh cookies (or update YOUTUBE_COOKIES in Render for restarts). Showing ${bestCover.qualityLabel}.`
+                                    : `YouTube blocked this cloud IP ("Sign in to confirm you're not a bot"). Click Cookies (top right) to upload fresh cookies, then try again. Showing ${bestCover.qualityLabel}.`)
                                 : `Timeline frame extraction error: ${err.message}. Loaded ${bestCover.qualityLabel}.`;
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             return res.end(JSON.stringify({
@@ -1994,14 +2007,32 @@ const server = http.createServer((req, res) => {
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
                 const hasRange = Boolean(start && end);
 
-                // If YouTube and NO specific range requested, try instant auto-sub extraction first (takes 100ms!)
+                // If YouTube and NO specific range requested, try instant auto-sub extraction first (writes .vtt to an isolated temp folder)
                 if (isYouTube && !hasRange) {
                     const cleanUrl = url.replace(/"/g, '\\"');
-                    const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-lang "en.*,en" --skip-download -o "-" "${cleanUrl}"`;
+                    const subDir = path.join(DOWNLOADS_DIR, `.sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`);
+                    fs.mkdirSync(subDir, { recursive: true });
+                    const subOutTpl = path.join(subDir, 'sub').replace(/\\/g, '/');
+                    const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-format vtt --sub-lang "en.*,en" --skip-download -o "${subOutTpl}" "${cleanUrl}"`;
 
                     exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
-                        const rawOutput = (stdout || '') + (stderr || '');
-                        const lines = rawOutput.split(/[\r\n]+/);
+                        let subOut = '';
+                        let vttFiles = [];
+                        try {
+                            if (fs.existsSync(subDir)) {
+                                vttFiles = fs.readdirSync(subDir).filter(f => f.toLowerCase().endsWith('.vtt')).sort((a, b) => a.length - b.length);
+                                if (vttFiles.length > 0) {
+                                    subOut = fs.readFileSync(path.join(subDir, vttFiles[0]), 'utf8').trim();
+                                }
+                            }
+                        } catch (e) {
+                        } finally {
+                            try { fs.rmSync(subDir, { recursive: true, force: true }); } catch (e) {}
+                        }
+
+                        const errOut = (stderr || '').trim();
+                        const hasSubtitleCues = subOut.includes('-->') || subOut.startsWith('WEBVTT');
+                        const lines = hasSubtitleCues ? subOut.split(/[\r\n]+/) : [];
                         const cleanLines = [];
                         const seen = new Set();
 
@@ -2016,7 +2047,8 @@ const server = http.createServer((req, res) => {
                             cleanLines.push(trimmed);
                         });
 
-                        if (cleanLines.length > 5) {
+                        if (cleanLines.length > 0) {
+                            if (cmd.includes('--cookies')) cookiesRejectedByYouTube = false;
                             console.log(`[Server YouTube Auto-Sub Extracted]: ${cleanLines.length} subtitle lines`);
                             res.writeHead(200, {
                                 'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -2036,6 +2068,24 @@ const server = http.createServer((req, res) => {
                                 success: true,
                                 transcript: cleanLines.join('\n'),
                                 source: 'youtube-autosub'
+                            }) + '\n');
+                            return res.end();
+                        }
+
+                        if (!hasSubtitleCues && /not a bot|Sign in to confirm|cookies are no longer valid/i.test(errOut)) {
+                            if (cmd.includes('--cookies')) cookiesRejectedByYouTube = true;
+                            const lastErrLine = errOut.split(/[\r\n]+/).filter(Boolean).slice(-1)[0] || errOut.slice(0, 220);
+                            console.warn(`[Server Transcript Bot Gate]: ${lastErrLine}`);
+                            res.writeHead(200, {
+                                'Content-Type': 'application/x-ndjson; charset=utf-8',
+                                'Cache-Control': 'no-cache, no-transform',
+                                'Connection': 'keep-alive',
+                                'X-Accel-Buffering': 'no'
+                            });
+                            res.write(JSON.stringify({
+                                type: 'result',
+                                success: false,
+                                error: 'YouTube blocked this cloud IP ("Sign in to confirm you\'re not a bot"). Click Cookies (top right) to upload fresh YouTube cookies, then retry.'
                             }) + '\n');
                             return res.end();
                         }
@@ -2229,6 +2279,7 @@ const server = http.createServer((req, res) => {
             size,
             lineCount,
             disabled: cookiesDisabled,
+            rejected: cookiesRejectedByYouTube,
             hasEnv: Boolean(process.env.YOUTUBE_COOKIES)
         }));
     }
@@ -2241,9 +2292,16 @@ const server = http.createServer((req, res) => {
             try {
                 const { cookies, action } = JSON.parse(body);
                 const cookiesPath = path.join(__dirname, 'cookies.txt');
+                const resetYouTubeCookieCaches = () => {
+                    cookiesRejectedByYouTube = false;
+                    ytStreamCache.clear();
+                    ytStoryboardCache.clear();
+                    ytFrameResultCache.clear();
+                };
 
                 if (action === 'clear') {
                     cookiesDisabled = true;
+                    resetYouTubeCookieCaches();
                     if (fs.existsSync(cookiesPath)) {
                         try { fs.unlinkSync(cookiesPath); } catch (e) {}
                     }
@@ -2254,6 +2312,7 @@ const server = http.createServer((req, res) => {
 
                 if (action === 'toggle') {
                     cookiesDisabled = !cookiesDisabled;
+                    resetYouTubeCookieCaches();
                     console.log(`[Cookies] Toggled cookies: ${cookiesDisabled ? 'DISABLED' : 'ENABLED'}`);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ success: true, disabled: cookiesDisabled }));
@@ -2267,6 +2326,7 @@ const server = http.createServer((req, res) => {
                 const cleanCookies = cookies.trim();
                 fs.writeFileSync(cookiesPath, cleanCookies, 'utf8');
                 cookiesDisabled = false;
+                resetYouTubeCookieCaches();
                 console.log(`[Cookies] Saved new cookies.txt (${cleanCookies.length} bytes) via web UI`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, message: `Successfully saved cookies (${cleanCookies.length} bytes)` }));
