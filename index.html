@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.7">
+    <link rel="stylesheet" href="style.css?v=3.8">
 </head>
 <body>
     <div class="app-container">
@@ -581,11 +581,21 @@
                             </div>
                         </div>
 
+                        <div class="tags-summary-card" id="tags-mode-summary">
+                            <div class="tags-summary-title"><i class="fa-solid fa-sparkles"></i> Instant Video Insights</div>
+                            <div class="tags-summary-pills">
+                                <span class="tags-summary-pill"><i class="fa-solid fa-hashtag"></i> Video SEO Tags</span>
+                                <span class="tags-summary-pill"><i class="fa-solid fa-layer-group"></i> Channel Categories</span>
+                                <span class="tags-summary-pill"><i class="fa-solid fa-chart-simple"></i> Views & Duration</span>
+                                <span class="tags-summary-pill"><i class="fa-solid fa-file-lines"></i> Full Description & .txt</span>
+                            </div>
+                        </div>
+
                         <div class="transcript-range-card" id="transcript-range-row" style="display: none;">
                             <div class="transcript-range-header">
-                                <span class="transcript-range-title"><i class="fa-solid fa-sliders"></i> Transcript Audio Range</span>
+                                <span class="transcript-range-title"><i class="fa-solid fa-sliders"></i> Transcript Range & Engine</span>
                                 <div class="transcript-range-actions">
-                                    <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-stopwatch"></i> Total: 00:05:00 (5m 0s)</span>
+                                    <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-bolt"></i> Auto (Instant Subs / 5m VOD)</span>
                                     <button type="button" class="btn-sync-range" onclick="syncTranscriptRangeFromClipper()" title="Import Start and End times from Section Clipper">
                                         <i class="fa-solid fa-arrows-rotate"></i> Sync from Clipper
                                     </button>
@@ -594,30 +604,31 @@
 
                             <div class="form-row transcript-inputs-row">
                                 <div class="form-group flex-1">
-                                    <label for="transcript-start"><i class="fa-regular fa-clock"></i> Start Time</label>
+                                    <label for="transcript-start"><i class="fa-regular fa-clock"></i> Start Time (Optional)</label>
                                     <div class="input-wrapper">
-                                        <input type="text" id="transcript-start" placeholder="00:00:00" value="00:00:00">
+                                        <input type="text" id="transcript-start" placeholder="00:00:00" value="">
                                     </div>
                                 </div>
                                 <div class="form-group flex-1">
-                                    <label for="transcript-end"><i class="fa-regular fa-clock"></i> End Time</label>
+                                    <label for="transcript-end"><i class="fa-regular fa-clock"></i> End Time (Optional)</label>
                                     <div class="input-wrapper">
-                                        <input type="text" id="transcript-end" placeholder="00:05:00" value="00:05:00">
+                                        <input type="text" id="transcript-end" placeholder="Auto" value="">
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- 1-Click Quick Range Presets for VODs -->
+                            <!-- 1-Click Quick Range Presets -->
                             <div class="transcript-presets-wrapper">
                                 <span class="presets-label"><i class="fa-solid fa-bolt"></i> Quick Presets:</span>
                                 <div class="transcript-presets-row">
-                                    <button type="button" class="transcript-preset-pill active" onclick="setTranscriptPreset('5m')">⚡ First 5m (Fast)</button>
+                                    <button type="button" class="transcript-preset-pill active" onclick="setTranscriptPreset('auto')">⚡ Auto (Fast)</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('5m')">⏱️ First 5m</button>
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('15m')">⏱️ 15m</button>
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('30m')">⏱️ 30m</button>
-                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('full')">🌐 Full VOD</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('full')">🌐 Full Stream</button>
                                 </div>
                             </div>
-                            <span class="field-hint"><i class="fa-solid fa-circle-info"></i> For long 6-9hr VODs, transcribing 5-15 mins finishes in ~10s. Choose <strong>Full VOD</strong> only if you need the entire multi-hour stream.</span>
+                            <span class="field-hint"><i class="fa-solid fa-circle-info"></i> <strong>Auto</strong> extracts full YouTube timestamped captions instantly (or first 5m on Whisper VODs). Click any timestamp line after extraction to jump the player there.</span>
                         </div>
                     </div>
 
@@ -835,6 +846,9 @@
                                 <span id="results-card-title">Extracted Video Tags & Metadata</span>
                             </div>
                             <div class="results-header-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadExtractedMetaFile()" title="Save Results as .txt">
+                                    <i class="fa-solid fa-download"></i> Save .txt
+                                </button>
                                 <button type="button" class="btn btn-secondary btn-sm" onclick="copyExtractedCategory('all')" title="Copy All Metadata">
                                     <i class="fa-regular fa-copy"></i> Copy All
                                 </button>
@@ -843,6 +857,8 @@
                                 </button>
                             </div>
                         </div>
+
+                        <div class="results-meta-pills hidden" id="results-meta-pills"></div>
 
                         <!-- Video Tags Block -->
                         <div class="results-section-block" id="results-video-tags-block">
@@ -871,9 +887,14 @@
                             <div class="results-notice-banner hidden" id="results-notice-banner"></div>
                             <div class="section-sub-header">
                                 <span id="results-body-header-title"><i class="fa-solid fa-align-left"></i> Video Description</span>
-                                <button type="button" class="btn-icon" onclick="copyExtractedCategory('description')" title="Copy Description">
+                                <button type="button" class="btn-icon" onclick="copyExtractedCategory('description')" title="Copy Description or Transcript">
                                     <i class="fa-regular fa-copy"></i>
                                 </button>
+                            </div>
+                            <div class="transcript-search-row hidden" id="transcript-search-row">
+                                <i class="fa-solid fa-magnifying-glass text-muted" style="font-size: 11px;"></i>
+                                <input type="text" id="transcript-search-input" placeholder="Search spoken keywords (click any timestamp to jump)...">
+                                <span class="transcript-search-count" id="transcript-search-count"></span>
                             </div>
                             <div class="results-text-box" id="results-text-box"></div>
                         </div>
@@ -1056,6 +1077,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=4.0"></script>
+    <script src="app.js?v=4.1"></script>
 </body>
 </html>

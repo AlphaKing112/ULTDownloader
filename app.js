@@ -131,6 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const rawTime = document.getElementById('thumb-timestamp')?.value.trim();
             const isZero = !rawTime || rawTime === '0' || rawTime === '00:00:00' || rawTime === '0:00' || rawTime === '00:00';
             btnLabel = isZero ? 'Download Default Cover (HD)' : `Download Frame (${rawTime})`;
+        } else if (activeTabId === 'tab-yt-tags') {
+            const mode = document.querySelector('input[name="analysis-mode"]:checked')?.value || 'tags';
+            btnLabel = mode === 'transcript' ? 'Generate AI Transcript' : 'Extract Tags & Metadata';
         }
         actionBtn.querySelector('span').textContent = btnLabel;
     }
@@ -156,6 +159,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (mobileToolDropdown && mobileToolDropdown.value !== activeTabId) {
             mobileToolDropdown.value = activeTabId;
+        }
+
+        // Auto-sync active link into Tags & Transcript if empty so user doesn't have to re-paste
+        if (activeTabId === 'tab-yt-tags') {
+            const tagsInput = document.getElementById('tags-url');
+            if (tagsInput && !tagsInput.value.trim()) {
+                const candidate = getPreferredActiveUrl();
+                if (candidate && /^https?:\/\//i.test(candidate)) {
+                    tagsInput.value = candidate;
+                }
+            }
         }
 
         const meta = tabMetadata[activeTabId];
@@ -297,8 +311,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const startVal = transcriptStartInput.value.trim();
         const endVal = transcriptEndInput.value.trim();
 
-        if (endVal.toLowerCase() === 'full' || (!startVal && !endVal)) {
-            transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-infinity"></i> Full Video';
+        if (!startVal && !endVal) {
+            transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-bolt"></i> Auto (Instant Subs / 5m VOD)';
+            transcriptDurationBadge.className = 'badge-duration valid';
+            return;
+        }
+        if (endVal.toLowerCase() === 'full') {
+            transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-infinity"></i> Full Stream';
             transcriptDurationBadge.className = 'badge-duration valid';
             return;
         }
@@ -322,7 +341,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!transcriptStartInput || !transcriptEndInput) return;
         document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
 
-        if (preset === '5m') {
+        if (preset === 'auto') {
+            transcriptStartInput.value = '';
+            transcriptEndInput.value = '';
+        } else if (preset === '5m') {
             transcriptStartInput.value = '00:00:00';
             transcriptEndInput.value = '00:05:00';
         } else if (preset === '15m') {
@@ -567,9 +589,10 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await res.json();
             if (data.success && data.metadata) {
-                const { tags, description, channel } = data.metadata;
-                renderTagCloud(tags && tags.length > 0 ? tags : ['youtube', 'video'], description);
-                logToConsole(`[Metadata] Extracted ${tags ? tags.length : 0} tags & video description from ${channel || 'YouTube'}.`, 'success');
+                renderExtractedMetadataResult(data);
+                const vCount = data.metadata.video_tags?.length || 0;
+                const cCount = data.metadata.channel_tags?.length || 0;
+                logToConsole(`[Metadata] Extracted ${vCount} video tags & ${cCount} channel tags from ${data.metadata.channel || 'YouTube'}.`, 'success');
             }
         } catch (e) {
             console.error('Metadata fetch error:', e);
@@ -1313,7 +1336,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (activeRadio) {
             activeRadio.checked = true;
             activeRadio.closest('.radio-card').classList.add('active');
+            updateActionBtnForTab();
             updateGeneratedCommand();
+        }
+        const tagsSummary = document.getElementById('tags-mode-summary');
+        if (tagsSummary) {
+            tagsSummary.style.display = mode === 'tags' ? 'flex' : 'none';
         }
         const rangeRow = document.getElementById('transcript-range-row');
         if (rangeRow) {
@@ -2802,7 +2830,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (mode === 'tags') {
-                    logToConsole('[Metadata] Extracting video tags, channel tags & description on-screen...', 'system');
+                    logToConsole('[Metadata] Extracting video tags, stats & description...', 'system');
                     try {
                         const res = await fetch('/api/fetch-metadata', {
                             method: 'POST',
@@ -2811,63 +2839,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                         const data = await res.json();
                         if (data.success && data.metadata) {
-                            const { video_tags, channel_tags, description, channel, title } = data.metadata;
-                            if (resultsTitle) resultsTitle.textContent = `Video & Channel Tags: "${title || 'YouTube Video'}"`;
-                            if (resultsIcon) resultsIcon.className = 'fa-solid fa-tags results-icon';
-
-                            const videoBlock = document.getElementById('results-video-tags-block');
-                            const channelBlock = document.getElementById('results-channel-tags-block');
-                            const videoTagsCloud = document.getElementById('results-video-tags-cloud');
-                            const channelTagsCloud = document.getElementById('results-channel-tags-cloud');
-                            const bodyHeaderTitle = document.getElementById('results-body-header-title');
-
-                            if (videoBlock) videoBlock.style.display = 'flex';
-                            if (channelBlock) channelBlock.style.display = 'flex';
-                            if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-align-left"></i> Video Description';
-
-                            // Render Video Tags
-                            if (videoTagsCloud) {
-                                videoTagsCloud.innerHTML = '';
-                                const vTags = video_tags && video_tags.length > 0 ? video_tags : ['youtube', 'video'];
-                                vTags.forEach(tag => {
-                                    const pill = document.createElement('span');
-                                    pill.className = 'tag-pill';
-                                    pill.textContent = `#${tag}`;
-                                    pill.onclick = () => {
-                                        navigator.clipboard.writeText(tag);
-                                        logToConsole(`[Clipboard] Copied video tag: #${tag}`, 'info');
-                                    };
-                                    videoTagsCloud.appendChild(pill);
-                                });
-                            }
-
-                            // Render Channel Tags
-                            if (channelTagsCloud) {
-                                channelTagsCloud.innerHTML = '';
-                                const cTags = channel_tags && channel_tags.length > 0 ? channel_tags : [channel || 'YouTubeChannel'];
-                                cTags.forEach(tag => {
-                                    const pill = document.createElement('span');
-                                    pill.className = 'tag-pill';
-                                    pill.textContent = `#${tag}`;
-                                    pill.onclick = () => {
-                                        navigator.clipboard.writeText(tag);
-                                        logToConsole(`[Clipboard] Copied channel tag: #${tag}`, 'info');
-                                    };
-                                    channelTagsCloud.appendChild(pill);
-                                });
-                            }
-
-                            if (textBox) {
-                                textBox.classList.remove('transcript-interactive-container');
-                                textBox.textContent = `[Channel / Uploader]: ${channel || 'YouTube'}\n\n[DESCRIPTION]:\n${description}`;
-                            }
-                            rawTranscriptData = description || '';
-                            if (resultsCard) resultsCard.classList.remove('hidden');
-
-                            renderTagCloud(video_tags, description);
-                            logToConsole(`[Success] Extracted ${video_tags ? video_tags.length : 0} video tags & ${channel_tags ? channel_tags.length : 0} channel tags!`, 'success');
+                            renderExtractedMetadataResult(data);
+                            const vCount = data.metadata.video_tags?.length || 0;
+                            const cCount = data.metadata.channel_tags?.length || 0;
+                            logToConsole(`[Success] Extracted ${vCount} video tags & ${cCount} channel categories!`, 'success');
                         } else {
-                            logToConsole('[Error] Could not fetch video metadata tags.', 'error');
+                            logToConsole(`[Error] ${data?.error || 'Could not fetch video metadata tags.'}`, 'error');
                         }
                     } catch (e) {
                         logToConsole('[Error] Failed to connect to metadata service.', 'error');
@@ -2876,10 +2853,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     const startVal = (document.getElementById('transcript-start')?.value || '').trim();
                     const endVal = (document.getElementById('transcript-end')?.value || '').trim();
                     const isFull = endVal.toLowerCase() === 'full';
-                    const hasRange = Boolean(startVal || (endVal && !isFull));
-                    const rangeMsg = isFull ? ' (Full Stream)' : (hasRange ? ` (${startVal || '00:00:00'} - ${endVal})` : ' (First 5m Fast Preview)');
+                    const hasRange = Boolean(!isFull && (startVal || endVal));
+                    const rangeMsg = isFull ? ' (Full Stream)' : (hasRange ? ` (${startVal || '00:00:00'} - ${endVal})` : ' (Auto: Instant Captions / 5m VOD)');
 
-                    logToConsole(`[AI Transcript] Generating speech-to-text transcript${rangeMsg}...`, 'system');
+                    logToConsole(`[AI Transcript] Extracting transcript${rangeMsg}...`, 'system');
                     showProgressBar('Connecting & preparing audio stream...');
                     updateProgressBar(5, 'Connecting...', 'Starting');
 
@@ -2925,15 +2902,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
                                                 const videoBlock = document.getElementById('results-video-tags-block');
                                                 const channelBlock = document.getElementById('results-channel-tags-block');
+                                                const metaPills = document.getElementById('results-meta-pills');
                                                 const bodyHeaderTitle = document.getElementById('results-body-header-title');
                                                 const noticeBanner = document.getElementById('results-notice-banner');
+                                                const isYtSubs = data.source === 'youtube-autosub';
 
                                                 if (videoBlock) videoBlock.style.display = 'none';
                                                 if (channelBlock) channelBlock.style.display = 'none';
-                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-brain"></i> AI Subtitles & Full Transcript';
+                                                if (metaPills) {
+                                                    metaPills.innerHTML = `<span class="meta-stat-pill"><i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'YouTube Timed Captions' : 'Whisper AI'}</span>`;
+                                                    metaPills.classList.remove('hidden');
+                                                }
+                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = `<i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'Interactive Timestamped Captions' : 'AI Subtitles & Full Transcript'}`;
 
-                                                if (resultsTitle) resultsTitle.textContent = 'AI Speech-to-Text Transcript (Local Whisper)';
-                                                if (resultsIcon) resultsIcon.className = 'fa-solid fa-brain results-icon';
+                                                if (resultsTitle) resultsTitle.textContent = isYtSubs ? 'YouTube Captions & Interactive Transcript' : 'AI Speech-to-Text Transcript (Whisper AI)';
+                                                if (resultsIcon) resultsIcon.className = `fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'} results-icon`;
 
                                                 if (noticeBanner) {
                                                     if (data.notice) {
@@ -2949,7 +2932,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 }
                                                 if (resultsCard) resultsCard.classList.remove('hidden');
 
-                                                logToConsole('[Success] Speech-to-text transcript generated directly on-screen!', 'success');
+                                                logToConsole(`[Success] ${isYtSubs ? 'YouTube captions' : 'Whisper transcript'} loaded (${data.transcript.split(/\r?\n/).length} lines)!`, 'success');
                                             } else {
                                                 hideProgressBar();
                                                 logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
@@ -3112,47 +3095,119 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 1200);
     }
 
-    function renderTagCloud(tagsArr, descText) {
-        const videoTagsContainer = document.getElementById('results-video-tags-cloud') || tagsCloudContainer;
-        const descContainer = document.getElementById('results-text-box') || descriptionBoxContainer;
-        const metaCard = document.getElementById('extracted-results-card') || extractedMetaCard;
+    let rawTranscriptData = '';
+    let lastResultsTitle = 'video';
+    let lastResultsMode = 'metadata';
 
-        if (videoTagsContainer) {
-            videoTagsContainer.innerHTML = '';
-            if (Array.isArray(tagsArr) && tagsArr.length > 0) {
-                tagsArr.forEach(tag => {
-                    const pill = document.createElement('span');
-                    pill.className = 'tag-pill';
-                    pill.textContent = `#${tag}`;
-                    pill.onclick = () => {
-                        if (navigator.clipboard) {
-                            navigator.clipboard.writeText(tag);
-                        }
-                        logToConsole(`[Clipboard] Copied tag: #${tag}`, 'info');
-                    };
-                    videoTagsContainer.appendChild(pill);
-                });
-            } else {
-                videoTagsContainer.innerHTML = '<span class="text-muted" style="color:var(--text-muted);font-size:0.85rem;">No video tags extracted</span>';
-            }
-        }
+    function formatCompactViews(num) {
+        const n = Number(num);
+        if (!Number.isFinite(n) || n <= 0) return '';
+        if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B views`;
+        if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M views`;
+        if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K views`;
+        return `${n.toLocaleString()} views`;
+    }
 
-        if (descContainer && descText) {
-            descContainer.classList.remove('transcript-interactive-container');
-            descContainer.textContent = descText;
-        }
-
-        if (metaCard) {
-            metaCard.classList.remove('hidden');
+    function renderMetadataTagPills(container, tags, emptyMsg) {
+        if (!container) return;
+        container.innerHTML = '';
+        if (Array.isArray(tags) && tags.length > 0) {
+            tags.forEach(tag => {
+                const pill = document.createElement('span');
+                pill.className = 'tag-pill';
+                pill.textContent = `#${tag}`;
+                pill.onclick = () => {
+                    if (navigator.clipboard) navigator.clipboard.writeText(tag);
+                    logToConsole(`[Clipboard] Copied tag: #${tag}`, 'info');
+                };
+                container.appendChild(pill);
+            });
+        } else {
+            container.innerHTML = `<span class="text-muted" style="color:var(--text-muted);font-size:0.85rem;">${escapeHtml(emptyMsg)}</span>`;
         }
     }
 
-    let rawTranscriptData = '';
+    function renderExtractedMetadataResult(data) {
+        const meta = data?.metadata || {};
+        const { video_tags = [], channel_tags = [], description = '', channel = '', title = '', view_count = null, duration_string = '' } = meta;
+        const resultsCard = document.getElementById('extracted-results-card') || extractedMetaCard;
+        const resultsTitle = document.getElementById('results-card-title');
+        const resultsIcon = document.getElementById('results-card-icon');
+        const metaPills = document.getElementById('results-meta-pills');
+        const videoBlock = document.getElementById('results-video-tags-block');
+        const channelBlock = document.getElementById('results-channel-tags-block');
+        const videoTagsCloud = document.getElementById('results-video-tags-cloud') || tagsCloudContainer;
+        const channelTagsCloud = document.getElementById('results-channel-tags-cloud');
+        const bodyHeaderTitle = document.getElementById('results-body-header-title');
+        const noticeBanner = document.getElementById('results-notice-banner');
+        const searchRow = document.getElementById('transcript-search-row');
+        const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
+
+        lastResultsMode = 'metadata';
+        lastResultsTitle = title || 'video';
+        rawTranscriptData = description || '';
+
+        if (resultsTitle) resultsTitle.textContent = title || 'Extracted Video Tags & Metadata';
+        if (resultsIcon) resultsIcon.className = 'fa-solid fa-tags results-icon';
+        if (videoBlock) videoBlock.style.display = 'flex';
+        if (channelBlock) channelBlock.style.display = 'flex';
+        if (searchRow) searchRow.classList.add('hidden');
+        if (noticeBanner) noticeBanner.classList.add('hidden');
+        if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-align-left"></i> Video Description';
+
+        if (metaPills) {
+            const pills = [];
+            if (channel) pills.push(`<span class="meta-stat-pill"><i class="fa-solid fa-tv"></i> ${escapeHtml(channel)}</span>`);
+            if (duration_string) pills.push(`<span class="meta-stat-pill"><i class="fa-regular fa-clock"></i> ${escapeHtml(duration_string)}</span>`);
+            const vStr = formatCompactViews(view_count);
+            if (vStr) pills.push(`<span class="meta-stat-pill"><i class="fa-regular fa-eye"></i> ${escapeHtml(vStr)}</span>`);
+            pills.push(`<span class="meta-stat-pill"><i class="fa-solid fa-hashtag"></i> ${video_tags.length} tags</span>`);
+            if (data.fallback) pills.push(`<span class="meta-stat-pill warn"><i class="fa-solid fa-triangle-exclamation"></i> Basic fallback (full tags timed out)</span>`);
+            metaPills.innerHTML = pills.join('');
+            metaPills.classList.toggle('hidden', pills.length === 0);
+        }
+
+        renderMetadataTagPills(videoTagsCloud, video_tags, data.fallback ? 'Tags unavailable in oEmbed fallback' : 'No public tags set on this video');
+        renderMetadataTagPills(channelTagsCloud, channel_tags.length > 0 ? channel_tags : (channel ? [channel] : []), 'No channel categories');
+
+        if (textBox) {
+            textBox.classList.remove('transcript-interactive-container');
+            textBox.textContent = description || 'No description provided.';
+        }
+        if (resultsCard) resultsCard.classList.remove('hidden');
+    }
+
+    function renderTagCloud(tagsArr, descText) {
+        renderExtractedMetadataResult({
+            success: true,
+            metadata: { title: 'Sample Video Metadata', video_tags: tagsArr || [], channel_tags: ['Demo'], channel: 'Demo Channel', description: descText || '' }
+        });
+    }
+
+    function filterInteractiveTranscriptRows(query) {
+        const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
+        const countEl = document.getElementById('transcript-search-count');
+        if (!textBox) return;
+        const q = String(query || '').trim().toLowerCase();
+        const rows = textBox.querySelectorAll('.transcript-interactive-row, .transcript-plain-line');
+        let shown = 0;
+        rows.forEach(r => {
+            const match = !q || r.textContent.toLowerCase().includes(q);
+            r.style.display = match ? '' : 'none';
+            if (match) shown++;
+        });
+        if (countEl) {
+            countEl.textContent = q ? `${shown} / ${rows.length} matches` : `${rows.length} lines`;
+        }
+    }
 
     function renderInteractiveTranscript(rawText) {
         const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
         if (!textBox) return;
 
+        lastResultsMode = 'transcript';
+        const tagsTitle = document.getElementById('results-card-title')?.textContent || 'transcript';
+        lastResultsTitle = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || tagsTitle;
         rawTranscriptData = rawText || '';
         textBox.innerHTML = '';
         textBox.classList.add('transcript-interactive-container');
@@ -3200,11 +3255,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        if (hasTimestamps) {
-            textBox.appendChild(fragment);
-        } else {
+        textBox.appendChild(fragment);
+        if (!hasTimestamps) {
             textBox.classList.remove('transcript-interactive-container');
-            textBox.textContent = rawText;
+        }
+
+        const searchRow = document.getElementById('transcript-search-row');
+        const searchInput = document.getElementById('transcript-search-input');
+        if (searchRow && searchInput) {
+            searchRow.classList.remove('hidden');
+            searchInput.value = '';
+            searchInput.oninput = () => filterInteractiveTranscriptRows(searchInput.value);
+            filterInteractiveTranscriptRows('');
         }
     }
 
@@ -3223,39 +3285,57 @@ document.addEventListener('DOMContentLoaded', () => {
             logToConsole('[Clipboard] Copied Channel Tags to clipboard!', 'success');
         } else if (category === 'description') {
             textToCopy = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
-            logToConsole('[Clipboard] Copied Description / Transcript to clipboard!', 'success');
+            logToConsole(`[Clipboard] Copied ${lastResultsMode === 'transcript' ? 'Transcript' : 'Description'} to clipboard!`, 'success');
         } else if (category === 'all') {
-            const vTags = Array.from(document.querySelectorAll('#results-video-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
-            const cTags = Array.from(document.querySelectorAll('#results-channel-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
-            const desc = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
-            textToCopy = `VIDEO TAGS:\n${vTags}\n\nCHANNEL TAGS:\n${cTags}\n\nDESCRIPTION / TRANSCRIPT:\n${desc}`;
-            logToConsole('[Clipboard] Copied All Metadata to clipboard!', 'success');
+            if (lastResultsMode === 'transcript') {
+                textToCopy = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
+                logToConsole('[Clipboard] Copied Full Transcript to clipboard!', 'success');
+            } else {
+                const vTags = Array.from(document.querySelectorAll('#results-video-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
+                const cTags = Array.from(document.querySelectorAll('#results-channel-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
+                const desc = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
+                textToCopy = `TITLE: ${lastResultsTitle}\n\nVIDEO TAGS:\n${vTags || 'None'}\n\nCHANNEL TAGS:\n${cTags || 'None'}\n\nDESCRIPTION:\n${desc}`;
+                logToConsole('[Clipboard] Copied All Metadata to clipboard!', 'success');
+            }
         }
 
-        if (textToCopy) {
-            navigator.clipboard.writeText(textToCopy);
+        if (textToCopy && navigator.clipboard) {
+            navigator.clipboard.writeText(textToCopy).catch(() => {});
         }
     };
 
     window.downloadExtractedMetaFile = function() {
-        const tags = Array.from(document.querySelectorAll('#tags-cloud-container .tag-pill')).map(p => p.textContent).join(', ');
-        const desc = document.getElementById('description-box-container')?.textContent || '';
-        if (!tags && (!desc || desc.includes('appear here after'))) {
-            logToConsole('[Warning] No extracted metadata to download yet.', 'system');
+        const descOrSub = rawTranscriptData || document.getElementById('results-text-box')?.innerText || '';
+        const vTags = Array.from(document.querySelectorAll('#results-video-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
+        const cTags = Array.from(document.querySelectorAll('#results-channel-tags-cloud .tag-pill')).map(p => p.textContent).join(', ');
+
+        if (!vTags && !cTags && !descOrSub) {
+            logToConsole('[Warning] Nothing extracted to download yet.', 'system');
             return;
         }
 
-        const content = `=== EXTRACTED VIDEO TAGS ===\n${tags}\n\n=== VIDEO DESCRIPTION ===\n${desc}`;
+        const safeName = sanitizeFilename(lastResultsTitle || 'video') || 'video';
+        let content = '';
+        let filename = '';
+        if (lastResultsMode === 'transcript') {
+            content = descOrSub;
+            filename = `${safeName}_transcript.txt`;
+        } else {
+            content = `=== TITLE ===\n${lastResultsTitle}\n\n=== VIDEO TAGS ===\n${vTags || 'None'}\n\n=== CHANNEL TAGS ===\n${cTags || 'None'}\n\n=== VIDEO DESCRIPTION ===\n${descOrSub}`;
+            filename = `${safeName}_metadata_tags.txt`;
+        }
+
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
+        showDownloadReadyBar(url, filename);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'video_metadata_tags.txt';
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        logToConsole('[Downloaded] Saved video tags & description text file!', 'success');
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        logToConsole(`[Downloaded] Saved "${filename}"!`, 'success');
     };
 
     window.browseFolderForInput = async function(inputId) {

@@ -1757,6 +1757,99 @@ input[type="number"] {
     line-height: 1.5;
 }
 
+.tags-summary-card {
+    background: rgba(167, 139, 250, 0.06);
+    border: 1px solid rgba(167, 139, 250, 0.2);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tags-summary-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-purple-light);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tags-summary-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.tags-summary-pill {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 3px 9px;
+}
+
+.results-meta-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.results-meta-pills.hidden {
+    display: none;
+}
+
+.meta-stat-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 3px 10px;
+}
+
+.meta-stat-pill.warn {
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.08);
+}
+
+.transcript-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+}
+
+.transcript-search-row.hidden {
+    display: none;
+}
+
+.transcript-search-row input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: 4px 0;
+    outline: none;
+}
+
+.transcript-search-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
 /* Interactive Click-to-Jump Transcript Rows */
 .results-text-box.transcript-interactive-container {
     display: flex;

@@ -2052,10 +2052,12 @@ const server = http.createServer((req, res) => {
                 console.log(`[Server Transcript Request]: ${url} (Range: ${start || '00:00:00'} - ${end || (full ? 'Full' : 'Default')})`);
 
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
-                const hasRange = Boolean(start && end);
+                const rangeStartSec = start ? parseTimestampToSeconds(start) : 0;
+                const rangeEndSec = (end && String(end).toLowerCase() !== 'full') ? parseTimestampToSeconds(end) : 0;
+                const hasRange = Boolean(!full && rangeEndSec > rangeStartSec);
 
-                // If YouTube and NO specific range requested, try instant auto-sub extraction first (writes .vtt to an isolated temp folder)
-                if (isYouTube && !hasRange) {
+                // Try YouTube .vtt subtitle extraction first (fast + interactive timestamps, filtered to range if requested)
+                if (isYouTube) {
                     const cleanUrl = url.replace(/"/g, '\\"');
                     const subDir = path.join(DOWNLOADS_DIR, `.sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`);
                     fs.mkdirSync(subDir, { recursive: true });
@@ -2079,24 +2081,50 @@ const server = http.createServer((req, res) => {
 
                         const errOut = (stderr || '').trim();
                         const hasSubtitleCues = subOut.includes('-->') || subOut.startsWith('WEBVTT');
-                        const lines = hasSubtitleCues ? subOut.split(/[\r\n]+/) : [];
                         const cleanLines = [];
-                        const seen = new Set();
+                        const seenText = new Set();
 
-                        lines.forEach(line => {
-                            const trimmed = line.replace(/<[^>]*>/g, '').trim();
-                            if (!trimmed) return;
-                            if (trimmed.startsWith('WEBVTT') || trimmed.startsWith('Kind:') || trimmed.startsWith('Language:') || trimmed.includes('-->')) return;
-                            if (/^\d+$/.test(trimmed)) return;
-                            if (seen.has(trimmed)) return;
+                        if (hasSubtitleCues) {
+                            const fmtVttSec = (s) => {
+                                const tot = Math.max(0, Math.floor(s));
+                                const h = Math.floor(tot / 3600);
+                                const m = Math.floor((tot % 3600) / 60);
+                                const sec = tot % 60;
+                                return h > 0
+                                    ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+                                    : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+                            };
+                            const decodeEntities = (str) => str
+                                .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                                .replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ');
 
-                            seen.add(trimmed);
-                            cleanLines.push(trimmed);
-                        });
+                            const blocks = subOut.split(/\r?\n\r?\n+/);
+                            for (const blk of blocks) {
+                                const blkLines = blk.split(/\r?\n/);
+                                const timeLineIdx = blkLines.findIndex(l => l.includes('-->'));
+                                if (timeLineIdx === -1) continue;
+                                const tm = blkLines[timeLineIdx].match(/([0-9:.]+)\s+-->\s+([0-9:.]+)/);
+                                if (!tm) continue;
+                                const sSec = parseTimestampToSeconds(tm[1].split('.')[0]);
+                                const eSec = parseTimestampToSeconds(tm[2].split('.')[0]);
+                                const rawDur = parseFloat(tm[2].split(':').pop()) - parseFloat(tm[1].split(':').pop());
+                                if (eSec === sSec && Math.abs(rawDur) < 0.05) continue; // skip 10ms VTT scroll snapshots
+                                if (hasRange && (eSec < rangeStartSec || sSec > rangeEndSec)) continue;
+
+                                const cueText = blkLines.slice(timeLineIdx + 1)
+                                    .map(l => decodeEntities(l.replace(/<[^>]*>/g, '')).trim())
+                                    .filter(Boolean)
+                                    .filter(l => !seenText.has(l) && (seenText.add(l), true))
+                                    .join(' ');
+                                if (cueText) {
+                                    cleanLines.push(`[${fmtVttSec(sSec)} - ${fmtVttSec(Math.max(sSec, eSec))}] ${cueText}`);
+                                }
+                            }
+                        }
 
                         if (cleanLines.length > 0) {
                             if (cmd.includes('--cookies')) cookiesRejectedByYouTube = false;
-                            console.log(`[Server YouTube Auto-Sub Extracted]: ${cleanLines.length} subtitle lines`);
+                            console.log(`[Server YouTube Auto-Sub Extracted]: ${cleanLines.length} timestamped cue lines`);
                             res.writeHead(200, {
                                 'Content-Type': 'application/x-ndjson; charset=utf-8',
                                 'Cache-Control': 'no-cache, no-transform',
