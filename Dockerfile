@@ -32,6 +32,11 @@ RUN npm install --production
 # Create downloads directory
 RUN mkdir -p downloads
 
+# Refresh yt-dlp in its own layer so YouTube player/EJS fixes deploy cleanly without rebuilding apt/whisper
+RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.11.23/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp \
+    && /usr/local/bin/yt-dlp --version
+
 # Copy application files
 COPY . .
 

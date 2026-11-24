@@ -126,7 +126,7 @@ def main():
             if is_yt:
                 ytdlp_cmd.append("--force-ipv4")
                 if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 10:
-                    ytdlp_cmd.extend(["--cookies", cookies_path, "--extractor-args", "youtube:player_client=tv,web_safari"])
+                    ytdlp_cmd.extend(["--cookies", cookies_path, "--extractor-args", "youtube:player_client=mweb,tv,web_safari"])
                 else:
                     ytdlp_cmd.extend(["--extractor-args", "youtube:player_client=android,ios,tv"])
             

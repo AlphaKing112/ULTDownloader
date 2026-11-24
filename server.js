@@ -63,8 +63,8 @@ function getCookiesFlag(url = '') {
 const YTDLP_JS_RUNTIME = fs.existsSync('/usr/local/bin/deno') ? 'deno' : 'node';
 
 function getYtdlpClientArgs(hasCookies = false) {
-    // android/ios do not support cookies in yt-dlp; tv,web_safari avoids mweb SABR & web PO-token slowdowns
-    const clients = hasCookies ? 'tv,web_safari' : 'android,ios,web_creator,tv';
+    // android/ios do not support cookies in yt-dlp; put mweb before tv/web_safari and avoid web EJS/SABR stalls
+    const clients = hasCookies ? 'mweb,tv,web_safari' : 'android,ios,web_creator,tv';
     return ` --extractor-args "youtube:player_client=${clients}"`;
 }
 
@@ -709,7 +709,7 @@ async function getYouTubeStoryboard(videoId, { skipYtdlp = false } = {}) {
 
     if (!skipYtdlp) {
         try {
-            const clients = hasCookies ? 'tv,web_safari,mweb,web' : 'android,ios,web_creator,tv';
+            const clients = hasCookies ? 'mweb,tv,web_safari' : 'android,ios,web_creator,tv';
             const args = [
                 ...(hasCookies ? ['--cookies', cookiesPath] : []),
                 '--dump-json', '--skip-download', '--force-ipv4', '--no-warnings',
@@ -851,7 +851,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                 console.log(`[Frame Extract] Attempting async direct stream extraction for ${videoId} at ${tsFormatted}...`);
                 const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
                 const attempts = hasCookies
-                    ? [{ useCookies: true, clients: 'tv,web_safari' }, { useCookies: false, clients: 'android' }]
+                    ? [{ useCookies: true, clients: 'mweb,tv,web_safari' }, { useCookies: false, clients: 'android' }]
                     : [{ useCookies: false, clients: 'android' }];
 
                 for (const att of attempts) {
@@ -1922,11 +1922,14 @@ const server = http.createServer((req, res) => {
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
                 const cleanUrl = url.replace(/"/g, '\\"');
-                const cmd = `${getBaseYtdlpCmd(url)} -j --no-warnings "${cleanUrl}"`;
+                const cmd = `${getBaseYtdlpCmd(url)} --ignore-no-formats-error -j --no-warnings "${cleanUrl}"`;
 
                 exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 55000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
                         const errDetail = (stderr || error?.message || 'No metadata returned').trim();
+                        if (cmd.includes('--cookies') && /not a bot|Sign in to confirm|cookies are no longer valid/i.test(errDetail)) {
+                            cookiesRejectedByYouTube = true;
+                        }
                         console.error(`[Server Metadata Fetch Error]: ${errDetail}`);
                         if (isYouTube) {
                             console.log(`[Server Metadata Fallback]: Querying public oEmbed for ${url}`);
