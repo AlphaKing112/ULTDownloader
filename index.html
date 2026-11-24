@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.5">
+    <link rel="stylesheet" href="style.css?v=3.6">
 </head>
 <body>
     <div class="app-container">
@@ -636,18 +636,17 @@
                         <div class="form-group">
                             <div class="label-with-val">
                                 <label for="thumb-timestamp"><i class="fa-regular fa-clock"></i> Frame Timestamp (Optional)</label>
-                                <span class="range-hint">e.g. 01:24:32</span>
+                                <span class="range-hint">Leave blank = Default Cover</span>
                             </div>
                             <div class="input-wrapper">
-                                <input type="text" id="thumb-timestamp" placeholder="00:00:00 (or leave blank for video cover)">
-                                <button type="button" class="btn-sync-player" onclick="syncThumbnailTimeFromPlayer()" title="Capture timestamp from active player">
+                                <input type="text" id="thumb-timestamp" placeholder="Leave blank for 1080p Default Cover (or e.g. 00:04:50)">
+                                <button type="button" class="btn-sync-player" onclick="syncThumbnailTimeFromPlayer()" title="Copy current player position into timestamp box">
                                     <i class="fa-solid fa-camera"></i> From Player
                                 </button>
-                                <button type="button" class="btn-reset-cover" onclick="resetThumbnailToDefaultCover()" title="Clear timestamp and load official high-resolution default cover">
-                                    <i class="fa-solid fa-rotate-left"></i> Default Cover
+                                <button type="button" class="btn-reset-cover" onclick="resetThumbnailToDefaultCover()" title="Clear timestamp and use 1080p Default Cover">
+                                    <i class="fa-solid fa-xmark"></i>
                                 </button>
                             </div>
-                            <span class="field-hint margin-top-xs"><i class="fa-solid fa-circle-info"></i> Leave blank or click <strong>Default Cover</strong> for crystal-clear HD video cover, or scrub player & click <strong>From Player</strong>.</span>
                         </div>
 
                         <div class="form-row">
@@ -679,14 +678,7 @@
                             <div class="thumb-img-wrapper">
                                 <img id="thumb-preview-img" alt="Video Thumbnail Preview">
                             </div>
-                            <div class="thumb-card-actions">
-                                <button type="button" class="btn btn-primary btn-sm" id="thumb-download-cover-btn" onclick="downloadDefaultCoverThumbnail()" title="Always download official video cover in full 1080p HD / 4K">
-                                    <i class="fa-regular fa-image"></i> Default Cover (1080p HD)
-                                </button>
-                                <button type="button" class="btn btn-secondary btn-sm" id="thumb-download-btn" onclick="downloadThumbnailImage()" title="Download current frame preview (or default cover if 00:00:00)">
-                                    <i class="fa-solid fa-download"></i> Download Frame
-                                </button>
-                            </div>
+                            <div class="thumb-preview-caption" id="thumb-preview-caption">Official 1080p Cover</div>
                         </div>
                     </div>
 
@@ -776,13 +768,9 @@
                             <span class="player-time-badge" id="player-live-time-display">00:00:00</span>
                         </div>
                         <div class="player-toolbar-buttons">
-                            <button type="button" class="btn btn-primary btn-sm btn-capture-thumb" id="btn-player-default-cover" onclick="downloadDefaultCoverThumbnail()" title="Download official video cover in crystal-clear 1080p Full HD">
-                                <i class="fa-regular fa-image"></i>
-                                <span>Default Cover (1080p HD)</span>
-                            </button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-player-capture-thumb" onclick="captureThumbnailFromPlayer()" title="Save video frame at this exact timestamp as thumbnail">
+                            <button type="button" class="btn btn-primary btn-sm btn-capture-thumb" id="btn-player-capture-thumb" onclick="captureThumbnailFromPlayer()" title="Grab frame at current player position (or Default Cover at 00:00:00)">
                                 <i class="fa-solid fa-camera"></i>
-                                <span>Save Frame at Timestamp</span>
+                                <span>Grab Current Frame</span>
                             </button>
                         </div>
                     </div>
@@ -805,14 +793,11 @@
                             </div>
                             <div class="captured-thumb-quality-banner" id="captured-thumb-banner">
                                 <i class="fa-solid fa-circle-info"></i>
-                                <span id="captured-thumb-banner-text">Custom timestamps extract video timeline preview (~320p-720p). For crystal-clear <strong>1080p Full HD</strong>, click <strong>Download Default Cover (1080p HD)</strong> below.</span>
+                                <span id="captured-thumb-banner-text">Clear timestamp above for 1080p Official Cover, or download this captured frame directly.</span>
                             </div>
                             <div class="captured-thumb-actions">
-                                <button type="button" class="btn btn-primary btn-sm" onclick="downloadDefaultCoverThumbnail()" title="Download official video cover in full 1080p Full HD">
-                                    <i class="fa-regular fa-image"></i> Download Default Cover (1080p HD)
-                                </button>
-                                <button type="button" class="btn btn-secondary btn-sm" id="btn-download-captured-thumb" onclick="downloadCapturedThumbnail()" title="Download the frame at this timestamp">
-                                    <i class="fa-solid fa-download"></i> Download Timestamp Frame
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-download-captured-thumb" onclick="downloadCapturedThumbnail()" title="Save captured thumbnail image to your computer">
+                                    <i class="fa-solid fa-download"></i> Download Image
                                 </button>
                                 <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-captured-thumb" onclick="copyCapturedThumbToClipboard()" title="Copy Image">
                                     <i class="fa-regular fa-copy"></i> Copy Image
@@ -1055,6 +1040,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=3.8"></script>
+    <script src="app.js?v=3.9"></script>
 </body>
 </html>
