@@ -63,8 +63,8 @@ function getCookiesFlag(url = '') {
 const YTDLP_JS_RUNTIME = fs.existsSync('/usr/local/bin/deno') ? 'deno' : 'node';
 
 function getYtdlpClientArgs(hasCookies = false) {
-    // android/ios do not support cookies in yt-dlp; prefer tv/web_safari before mweb (avoids SABR slowdowns)
-    const clients = hasCookies ? 'tv,web_safari,mweb,web' : 'android,ios,web_creator,tv';
+    // android/ios do not support cookies in yt-dlp; tv,web_safari avoids mweb SABR & web PO-token slowdowns
+    const clients = hasCookies ? 'tv,web_safari' : 'android,ios,web_creator,tv';
     return ` --extractor-args "youtube:player_client=${clients}"`;
 }
 
@@ -1924,7 +1924,7 @@ const server = http.createServer((req, res) => {
                 const cleanUrl = url.replace(/"/g, '\\"');
                 const cmd = `${getBaseYtdlpCmd(url)} -j --no-warnings "${cleanUrl}"`;
 
-                exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
+                exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 55000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
                         const errDetail = (stderr || error?.message || 'No metadata returned').trim();
                         console.error(`[Server Metadata Fetch Error]: ${errDetail}`);

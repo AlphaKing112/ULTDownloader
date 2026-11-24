@@ -95,16 +95,17 @@ def main():
 
     try:
         if is_url:
-            # Detect whether this is a long VOD (Twitch / Kick VOD)
+            # Detect whether this is a long VOD (Twitch / Kick VOD) or YouTube on constrained Render tier
             is_vod = bool(re.search(r'twitch\.tv/videos/\d+|kick\.com/video/|kick\.com/[^/]+/videos/', source, re.I))
+            is_yt = ("youtube.com" in source.lower() or "youtu.be" in source.lower())
+            is_render_host = bool(os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"))
             start_time = args.start.strip()
             end_time = args.end.strip()
             is_full = args.full or end_time.lower() in ("full", "all", "inf")
             auto_capped = False
 
-            # If user submitted a long VOD without any range and didn't check "Full VOD":
-            # Default to first 5 minutes to prevent 45+ minute CPU freeze on a 6-9 hour VOD!
-            if is_vod and not start_time and (not end_time or not is_full):
+            # Default to first 5 minutes when no explicit range or Full flag is provided on VODs or Render YouTube hosts
+            if (is_vod or (is_render_host and is_yt)) and not start_time and (not end_time or not is_full):
                 start_time = "00:00:00"
                 end_time = "00:05:00"
                 auto_capped = True
@@ -122,10 +123,10 @@ def main():
                 "-o", f"{temp_base}.%(ext)s"
             ]
             cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
-            if ("youtube.com" in source.lower() or "youtu.be" in source.lower()):
+            if is_yt:
                 ytdlp_cmd.append("--force-ipv4")
                 if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 10:
-                    ytdlp_cmd.extend(["--cookies", cookies_path, "--extractor-args", "youtube:player_client=tv,web_safari,mweb,web"])
+                    ytdlp_cmd.extend(["--cookies", cookies_path, "--extractor-args", "youtube:player_client=tv,web_safari"])
                 else:
                     ytdlp_cmd.extend(["--extractor-args", "youtube:player_client=android,ios,tv"])
             
