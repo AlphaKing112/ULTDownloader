@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.6">
+    <link rel="stylesheet" href="style.css?v=3.7">
 </head>
 <body>
     <div class="app-container">
@@ -899,6 +899,22 @@
                         </div>
                     </div>
 
+                    <!-- Direct Download Ready Bar (ensures 1-tap saving on iPhone/iPad Safari & mobile browsers) -->
+                    <div class="download-ready-bar hidden" id="download-ready-bar">
+                        <div class="download-ready-info">
+                            <i class="fa-solid fa-circle-check" style="color: #22c55e;"></i>
+                            <span id="download-ready-name">Ready to save</span>
+                        </div>
+                        <div class="download-ready-actions">
+                            <a id="download-ready-link" class="btn btn-primary btn-sm" href="#" download>
+                                <i class="fa-solid fa-download"></i> Save File
+                            </a>
+                            <button type="button" class="btn-icon" onclick="document.getElementById('download-ready-bar')?.classList.add('hidden')" title="Dismiss">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Terminal Display -->
                     <div class="console-body" id="console-output">
                         <div class="log-line system">[System] Clip Vault Utility Studio initialized.</div>
@@ -1040,6 +1056,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=3.9"></script>
+    <script src="app.js?v=4.0"></script>
 </body>
 </html>

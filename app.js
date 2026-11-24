@@ -2267,6 +2267,29 @@ document.addEventListener('DOMContentLoaded', () => {
         if (card) card.classList.add('hidden');
     };
 
+    function dataUrlToBlob(dataUrl) {
+        if (!dataUrl || !dataUrl.startsWith('data:')) return null;
+        const commaIdx = dataUrl.indexOf(',');
+        if (commaIdx === -1) return null;
+        const header = dataUrl.slice(5, commaIdx);
+        const mime = header.split(';')[0] || 'application/octet-stream';
+        const binStr = atob(dataUrl.slice(commaIdx + 1));
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+        return new Blob([bytes], { type: mime });
+    }
+
+    function showDownloadReadyBar(href, filename) {
+        const bar = document.getElementById('download-ready-bar');
+        const link = document.getElementById('download-ready-link');
+        const nameEl = document.getElementById('download-ready-name');
+        if (!bar || !link || !href) return;
+        link.href = href;
+        if (filename) link.download = filename;
+        if (nameEl) nameEl.textContent = filename ? `Ready: ${filename}` : 'Ready to save';
+        bar.classList.remove('hidden');
+    }
+
     window.downloadCapturedThumbnail = async function() {
         if (!lastCapturedThumbData) return;
         const filename = lastCapturedThumbData.filename || `thumbnail_${(lastCapturedThumbData.timestamp || 'frame').replace(/:/g, '-')}.jpg`;
@@ -2274,17 +2297,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!downloadUrl) return;
 
         try {
-            const res = await fetch(downloadUrl);
-            const blob = await res.blob();
+            // Convert data: URLs synchronously so iOS Safari preserves tap gesture context
+            const syncBlob = dataUrlToBlob(downloadUrl);
+            const blob = syncBlob || await (await fetch(downloadUrl)).blob();
             const url = URL.createObjectURL(blob);
+            showDownloadReadyBar(url, filename);
             const a = document.createElement('a');
             a.href = url;
             a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 10000);
-            logToConsole(`[Thumbnail Downloaded] Saved "${filename}" to your computer!`, 'success');
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            logToConsole(`[Thumbnail Downloaded] Saved "${filename}" to your device (or tap "Save File" above on iPhone/Safari)!`, 'success');
         } catch (e) {
             window.open(downloadUrl, '_blank');
         }
@@ -3012,6 +3037,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 logToConsole(`[Saved] Successfully saved file to: "${activeFileHandle.name}"!`, 'success');
                                                 activeFileHandle = null;
                                             } else {
+                                                showDownloadReadyBar(dlUrl, fname);
                                                 const a = document.createElement('a');
                                                 a.href = dlUrl;
                                                 a.download = fname;
@@ -3019,7 +3045,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 document.body.appendChild(a);
                                                 a.click();
                                                 document.body.removeChild(a);
-                                                logToConsole(`[Saved] Browser download started for "${fname}"!`, 'success');
+                                                logToConsole(`[Saved] Download started for "${fname}" (tap "Save File" above if iOS Safari waits for confirmation).`, 'success');
                                             }
                                         } catch (dlErr) {
                                             logToConsole(`[Error] Could not save file: ${dlErr.message}`, 'error');
@@ -3415,13 +3441,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!res) throw new Error('No YouTube cover image returned HTTP 200');
                 const blob = await res.blob();
                 const blobUrl = URL.createObjectURL(blob);
+                showDownloadReadyBar(blobUrl, filename);
                 const a = document.createElement('a');
                 a.href = blobUrl;
                 a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
                 logToConsole(`[Thumbnail Downloaded] Saved official cover "${filename}" (${Math.round(blob.size / 1024)} KB)!`, 'success');
                 return;
             } catch (e) {
@@ -3450,14 +3477,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const imgRes = await fetch(data.thumbnailUrl);
                 const blob = await imgRes.blob();
                 const blobUrl = URL.createObjectURL(blob);
+                const outName = data.filename || filename;
+                showDownloadReadyBar(blobUrl, outName);
                 const a = document.createElement('a');
                 a.href = blobUrl;
-                a.download = data.filename || filename;
+                a.download = outName;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                logToConsole(`[Thumbnail Downloaded] Saved official high-resolution default cover "${filename}"!`, 'success');
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                logToConsole(`[Thumbnail Downloaded] Saved official high-resolution default cover "${outName}"!`, 'success');
             } else {
                 throw new Error(data?.error || 'Failed to fetch default cover');
             }

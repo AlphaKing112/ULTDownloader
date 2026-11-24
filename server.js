@@ -1495,6 +1495,7 @@ const server = http.createServer((req, res) => {
                                     console.log(`[Server] Token created: ${downloadToken} for file: ${fileName}`);
                                     for (const [k, v] of downloadTokens) {
                                         if (v.expires < Date.now()) {
+                                            if (v.cleanupTimer) clearTimeout(v.cleanupTimer);
                                             if (v.jobDir) {
                                                 try { fs.rmSync(v.jobDir, { recursive: true, force: true }); } catch (e) {}
                                             }
@@ -1586,7 +1587,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Download File to Browser Endpoint (token-based, avoids filename encoding issues)
+    // API Download File to Browser Endpoint (token-based, Safari Range + multi-tap safe)
     if (pathname === '/api/download-file' && req.method === 'GET') {
         const query = urlModule.parse(req.url, true).query;
         const token = query.token || '';
@@ -1597,8 +1598,9 @@ const server = http.createServer((req, res) => {
             return res.end('Missing token');
         }
         const entry = downloadTokens.get(token);
-        if (!entry) {
-            console.log(`[DownloadFile] 404: token not found. Known tokens: ${[...downloadTokens.keys()].join(', ')}`);
+        if (!entry || entry.expires < Date.now()) {
+            if (entry) downloadTokens.delete(token);
+            console.log(`[DownloadFile] 404: token not found or expired. Known tokens: ${[...downloadTokens.keys()].join(', ')}`);
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             return res.end('Token not found or expired');
         }
@@ -1615,33 +1617,69 @@ const server = http.createServer((req, res) => {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             return res.end('File not found on disk');
         }
-        downloadTokens.delete(token); // one-time use
+
         const stat = fs.statSync(absPath);
+        const totalSize = stat.size;
         const ext = path.extname(absPath).toLowerCase();
-        const mimeMap = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.mkv': 'video/x-matroska', '.webm': 'video/webm', '.m4a': 'audio/m4a', '.wav': 'audio/wav' };
+        const mimeMap = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.mkv': 'video/x-matroska', '.webm': 'video/webm', '.m4a': 'audio/m4a', '.wav': 'audio/wav', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png' };
         const mime = mimeMap[ext] || 'application/octet-stream';
         const safeFilename = path.basename(absPath).replace(/[";\\]/g, '_');
-        res.writeHead(200, {
-            'Content-Type': mime,
-            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
-            'Content-Length': stat.size
-        });
-        const stream = fs.createReadStream(absPath);
-        stream.pipe(res);
-        // Delete file and isolated job directory from disk after transfer completes
-        const cleanupAfterServe = () => {
-            if (entryJobDir && fs.existsSync(entryJobDir)) {
-                fs.rm(entryJobDir, { recursive: true, force: true }, (err) => {
-                    if (!err) console.log(`[Server] Cleaned job folder: ${path.basename(entryJobDir)}`);
-                });
-            } else {
-                fs.unlink(absPath, (err) => {
-                    if (!err) console.log(`[Server] Deleted from disk: ${path.basename(absPath)}`);
-                    else console.log(`[Server] Delete failed: ${err.message}`);
-                });
-            }
+        const asciiFilename = safeFilename.replace(/[^\x20-\x7E]/g, '_');
+        const dispHeader = `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`;
+
+        const scheduleCleanupAfterGrace = () => {
+            if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
+            entry.expires = Math.min(entry.expires, Date.now() + 90000);
+            entry.cleanupTimer = setTimeout(() => {
+                downloadTokens.delete(token);
+                if (entryJobDir && fs.existsSync(entryJobDir)) {
+                    fs.rm(entryJobDir, { recursive: true, force: true }, (err) => {
+                        if (!err) console.log(`[Server] Cleaned job folder: ${path.basename(entryJobDir)}`);
+                    });
+                } else if (fs.existsSync(absPath)) {
+                    fs.unlink(absPath, (err) => {
+                        if (!err) console.log(`[Server] Deleted from disk: ${path.basename(absPath)}`);
+                        else console.log(`[Server] Delete failed: ${err.message}`);
+                    });
+                }
+            }, 90000);
         };
-        stream.on('end', cleanupAfterServe);
+
+        const rangeHeader = req.headers.range;
+        let stream;
+        if (rangeHeader && /^bytes=\d*-\d*$/i.test(rangeHeader.trim())) {
+            const [sStr, eStr] = rangeHeader.trim().replace(/^bytes=/i, '').split('-');
+            const start = sStr ? parseInt(sStr, 10) : 0;
+            const end = eStr ? Math.min(totalSize - 1, parseInt(eStr, 10)) : (totalSize - 1);
+            if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= totalSize) {
+                res.writeHead(416, { 'Content-Range': `bytes */${totalSize}` });
+                return res.end();
+            }
+            res.writeHead(206, {
+                'Content-Type': mime,
+                'Content-Disposition': dispHeader,
+                'Accept-Ranges': 'bytes',
+                'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+                'Content-Length': (end - start) + 1,
+                'Cache-Control': 'no-store'
+            });
+            stream = fs.createReadStream(absPath, { start, end });
+            if (end >= totalSize - 1) {
+                stream.on('end', scheduleCleanupAfterGrace);
+            }
+        } else {
+            res.writeHead(200, {
+                'Content-Type': mime,
+                'Content-Disposition': dispHeader,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': totalSize,
+                'Cache-Control': 'no-store'
+            });
+            stream = fs.createReadStream(absPath);
+            stream.on('end', scheduleCleanupAfterGrace);
+        }
+
+        stream.pipe(res);
         res.on('close', () => {
             if (!res.writableFinished) stream.destroy();
         });
