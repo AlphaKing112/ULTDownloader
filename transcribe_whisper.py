@@ -115,11 +115,19 @@ def main():
 
             ytdlp_cmd = [
                 "yt-dlp", "--no-warnings",
+                "--js-runtimes", "deno" if os.path.exists("/usr/local/bin/deno") else "node",
                 "-f", "ba/ba*/Audio_Only/bestaudio/worst",
                 "-x", "--audio-format", "mp3",
                 "--concurrent-fragments", "5",
                 "-o", f"{temp_base}.%(ext)s"
             ]
+            cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            if ("youtube.com" in source.lower() or "youtu.be" in source.lower()):
+                ytdlp_cmd.append("--force-ipv4")
+                if os.path.exists(cookies_path) and os.path.getsize(cookies_path) > 10:
+                    ytdlp_cmd.extend(["--cookies", cookies_path, "--extractor-args", "youtube:player_client=tv,web_safari,mweb,web"])
+                else:
+                    ytdlp_cmd.extend(["--extractor-args", "youtube:player_client=android,ios,tv"])
             
             # Apply section targeting if range is specified and not full VOD
             if start_time and end_time and not is_full:

@@ -60,9 +60,11 @@ function getCookiesFlag(url = '') {
     return '';
 }
 
+const YTDLP_JS_RUNTIME = fs.existsSync('/usr/local/bin/deno') ? 'deno' : 'node';
+
 function getYtdlpClientArgs(hasCookies = false) {
-    // android/ios do not support cookies in yt-dlp; use cookie-compatible clients when cookies are present
-    const clients = hasCookies ? 'web_safari,mweb,web,tv' : 'android,ios,web_creator,tv';
+    // android/ios do not support cookies in yt-dlp; prefer tv/web_safari before mweb (avoids SABR slowdowns)
+    const clients = hasCookies ? 'tv,web_safari,mweb,web' : 'android,ios,web_creator,tv';
     return ` --extractor-args "youtube:player_client=${clients}"`;
 }
 
@@ -74,7 +76,7 @@ function injectYtdlpFlags(command, { cookiesFlag = '', isYT = false, isKick = fa
         prefixFlags.push('--impersonate Chrome');
     }
     if (!out.includes('--js-runtimes')) {
-        prefixFlags.push('--js-runtimes node');
+        prefixFlags.push(`--js-runtimes ${YTDLP_JS_RUNTIME}`);
     }
     if (cookiesFlag && !out.includes('--cookies')) {
         prefixFlags.push(cookiesFlag.trim());
@@ -107,9 +109,9 @@ function getBaseYtdlpCmd(url = '') {
     const clientOverride = isYouTube ? getYtdlpClientArgs(Boolean(cookiesFlag)) : '';
     const ytArgs = isYouTube ? ` --force-ipv4 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"${clientOverride} --concurrent-fragments 5` : '';
     if (cookiesFlag) {
-        return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes node`;
+        return `yt-dlp${cookiesFlag}${impersonateFlag}${ytArgs} --js-runtimes ${YTDLP_JS_RUNTIME}`;
     }
-    return `yt-dlp${impersonateFlag}${ytArgs} --js-runtimes node`;
+    return `yt-dlp${impersonateFlag}${ytArgs} --js-runtimes ${YTDLP_JS_RUNTIME}`;
 }
 
 // --- Channel VOD / Highlight / Clip Browser (Twitch + Kick) ---
@@ -707,15 +709,15 @@ async function getYouTubeStoryboard(videoId, { skipYtdlp = false } = {}) {
 
     if (!skipYtdlp) {
         try {
-            const clients = hasCookies ? 'web_safari,mweb,web,tv' : 'android,ios,web_creator,tv';
+            const clients = hasCookies ? 'tv,web_safari,mweb,web' : 'android,ios,web_creator,tv';
             const args = [
                 ...(hasCookies ? ['--cookies', cookiesPath] : []),
                 '--dump-json', '--skip-download', '--force-ipv4', '--no-warnings',
-                '--js-runtimes', 'node',
+                '--js-runtimes', YTDLP_JS_RUNTIME,
                 '--extractor-args', `youtube:player_client=${clients}`,
                 `https://www.youtube.com/watch?v=${videoId}`
             ];
-            const { stdout } = await execFileAsync(ytdlpBin, args, { maxBuffer: 25 * 1024 * 1024, timeout: 12000, windowsHide: true });
+            const { stdout } = await execFileAsync(ytdlpBin, args, { maxBuffer: 25 * 1024 * 1024, timeout: hasCookies ? 40000 : 12000, windowsHide: true });
             const data = JSON.parse(stdout);
             const storyboards = (data.formats || []).filter(f => f.format_note === 'storyboard');
             if (storyboards && storyboards.length > 0) {
@@ -834,6 +836,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
         const tsFormatted = formatSeconds(targetSeconds);
 
         let hitBotWall = false;
+        let timedOutWithCookies = false;
         const cookiesPath = path.join(__dirname, 'cookies.txt');
         const cookiesFlag = getCookiesFlag('https://www.youtube.com');
         const hasCookies = Boolean(cookiesFlag && fs.existsSync(cookiesPath));
@@ -848,7 +851,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                 console.log(`[Frame Extract] Attempting async direct stream extraction for ${videoId} at ${tsFormatted}...`);
                 const ytdlpBin = fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : 'yt-dlp';
                 const attempts = hasCookies
-                    ? [{ useCookies: true, clients: 'web_safari,mweb' }, { useCookies: false, clients: 'android' }]
+                    ? [{ useCookies: true, clients: 'tv,web_safari' }, { useCookies: false, clients: 'android' }]
                     : [{ useCookies: false, clients: 'android' }];
 
                 for (const att of attempts) {
@@ -856,11 +859,11 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                         const args = [
                             ...(att.useCookies ? ['--cookies', cookiesPath] : []),
                             '-g', '-f', '22/best[height<=720][acodec!=none]/18/best',
-                            '--force-ipv4', '--no-warnings', '--js-runtimes', 'node',
+                            '--force-ipv4', '--no-warnings', '--js-runtimes', YTDLP_JS_RUNTIME,
                             '--extractor-args', `youtube:player_client=${att.clients}`,
                             `https://www.youtube.com/watch?v=${videoId}`
                         ];
-                        const { stdout } = await execFileAsync(ytdlpBin, args, { timeout: 12000, windowsHide: true });
+                        const { stdout } = await execFileAsync(ytdlpBin, args, { timeout: att.useCookies ? 45000 : 12000, windowsHide: true });
                         const matched = (stdout || '').trim().match(/https?:\/\/[^\r\n]+/);
                         if (matched && matched[0]) {
                             streamUrl = matched[0];
@@ -875,6 +878,9 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                         if (/not a bot|Sign in to confirm|cookies are no longer valid/i.test(msg)) {
                             hitBotWall = true;
                             if (att.useCookies) cookiesRejectedByYouTube = true;
+                        } else if (att.useCookies && (attErr.killed || attErr.signal === 'SIGTERM')) {
+                            timedOutWithCookies = true;
+                            break;
                         }
                     }
                 }
@@ -888,7 +894,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                     '-vf', `${aspectSafeScale},unsharp=5:5:0.8:5:5:0.0`,
                     ...ffmpegOutArgs
                 ];
-                const { stdout: frameBuf } = await execFileAsync('ffmpeg', ffArgs, { encoding: 'buffer', maxBuffer: 25 * 1024 * 1024, timeout: 15000, windowsHide: true });
+                const { stdout: frameBuf } = await execFileAsync('ffmpeg', ffArgs, { encoding: 'buffer', maxBuffer: 25 * 1024 * 1024, timeout: 25000, windowsHide: true });
 
                 if (frameBuf && frameBuf.length > 1000) {
                     console.log(`[Frame Extract Success] Direct frame generated (${outExt.toUpperCase()}): ${frameBuf.length} bytes`);
@@ -906,7 +912,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
             console.warn(`[Frame Extract Notice]: Direct stream extraction failed (${streamErr.message}). Trying storyboard fallback...`);
         }
 
-        const sb = await getYouTubeStoryboard(videoId, { skipYtdlp: hitBotWall });
+        const sb = await getYouTubeStoryboard(videoId, { skipYtdlp: hitBotWall || timedOutWithCookies });
 
         let sheetUrl = '';
         let cropX = 0;
@@ -1918,7 +1924,7 @@ const server = http.createServer((req, res) => {
                 const cleanUrl = url.replace(/"/g, '\\"');
                 const cmd = `${getBaseYtdlpCmd(url)} -j --no-warnings "${cleanUrl}"`;
 
-                exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
+                exec(cmd, { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
                     if (error || !stdout || !stdout.trim()) {
                         const errDetail = (stderr || error?.message || 'No metadata returned').trim();
                         console.error(`[Server Metadata Fetch Error]: ${errDetail}`);
@@ -2015,7 +2021,7 @@ const server = http.createServer((req, res) => {
                     const subOutTpl = path.join(subDir, 'sub').replace(/\\/g, '/');
                     const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-format vtt --sub-lang "en.*,en" --skip-download -o "${subOutTpl}" "${cleanUrl}"`;
 
-                    exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 25000 }, (error, stdout, stderr) => {
+                    exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
                         let subOut = '';
                         let vttFiles = [];
                         try {
