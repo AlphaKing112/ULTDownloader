@@ -26,7 +26,7 @@
 - **Frontend**: HTML5, Vanilla CSS3 (Glassmorphism & Neon Glow theme), JavaScript (ES6+), FontAwesome Icons
 - **Backend**: Node.js HTTP Server (`server.js`), `child_process` execution streaming
 - **Core Utilities**: `yt-dlp` (DASH & JS Runtime support), `ffmpeg` (H.264/AAC encoding)
-- **Deployment**: Docker (`node:18-bullseye-slim`), Render Web Service
+- **Deployment**: Docker (`node:20-bookworm-slim`), Render Web Service
 
 ---
 

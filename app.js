@@ -21,14 +21,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const tagsCloudContainer = document.getElementById('results-video-tags-cloud');
     const descriptionBoxContainer = document.getElementById('results-text-box');
 
-    // Thumbnail preview
-    const thumbnailPreviewCard = document.getElementById('thumbnail-preview-card');
-    const thumbPreviewImg = document.getElementById('thumb-preview-img');
-    const thumbDownloadLink = document.getElementById('thumb-download-link');
-
     // Modal elements
     const cmdModalOverlay = document.getElementById('cmd-modal-overlay');
     const modalCliCode = document.getElementById('modal-cli-code');
+
+    function applyYouTubeCoverFallback(imgEl, ytId, onNextSrc = null) {
+        if (!imgEl || !ytId) return;
+        imgEl.onerror = function() {
+            let nextSrc = '';
+            if (this.src.includes('maxresdefault.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/hq720.jpg`;
+            else if (this.src.includes('hq720.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/sddefault.jpg`;
+            else if (this.src.includes('sddefault.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+            if (nextSrc) {
+                this.src = nextSrc;
+                if (typeof onNextSrc === 'function') onNextSrc(nextSrc);
+            }
+        };
+    }
+
+    function triggerFileDownload(href, filename, { revokeMs = 0, showReadyBar = true, newTab = false } = {}) {
+        if (!href) return;
+        if (showReadyBar && typeof showDownloadReadyBar === 'function') {
+            showDownloadReadyBar(href, filename);
+        }
+        const a = document.createElement('a');
+        a.href = href;
+        if (filename) a.download = filename;
+        if (newTab) a.target = '_blank';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        if (revokeMs > 0 && href.startsWith('blob:')) {
+            setTimeout(() => URL.revokeObjectURL(href), revokeMs);
+        }
+    }
 
     // Current state
     let activeTabId = 'tab-quick-download';
@@ -232,7 +259,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Live Section Clip Duration Calculator ---
     const sectionStartInput = document.getElementById('section-start');
     const sectionEndInput = document.getElementById('section-end');
-    const sectionTotalDurationBadge = document.getElementById('section-total-duration');
     const sectionDurationText = document.getElementById('section-duration-text');
     const sectionRangePreview = document.getElementById('section-range-preview');
     const sectionDurationCard = document.getElementById('section-duration-card');
@@ -269,18 +295,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const hhmmss = formatSecondsToHHMMSS(durationSec);
             const human = formatDurationHuman(durationSec);
             const label = `${hhmmss} (${human})`;
-            if (sectionTotalDurationBadge) {
-                sectionTotalDurationBadge.innerHTML = `<i class="fa-solid fa-stopwatch"></i> Total: ${label}`;
-                sectionTotalDurationBadge.className = 'badge-duration valid';
-            }
             if (sectionDurationText) sectionDurationText.textContent = label;
             if (sectionRangePreview) sectionRangePreview.textContent = `${sectionStartInput.value.trim()} → ${sectionEndInput.value.trim()}`;
             if (sectionDurationCard) sectionDurationCard.classList.remove('invalid');
         } else {
-            if (sectionTotalDurationBadge) {
-                sectionTotalDurationBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> End must be > Start';
-                sectionTotalDurationBadge.className = 'badge-duration invalid';
-            }
             if (sectionDurationText) sectionDurationText.textContent = 'Invalid time range';
             if (sectionRangePreview) sectionRangePreview.textContent = 'End time must be after start time';
             if (sectionDurationCard) sectionDurationCard.classList.add('invalid');
@@ -1557,12 +1575,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // --- Unified Media Player, Player Selector Dropdown & Timestamp Capture ---
-    const mediaPlayerCard = document.getElementById('media-player-card') || document.getElementById('twitch-player-card');
+    // --- Unified Media Player & Timestamp Capture ---
+    const mediaPlayerCard = document.getElementById('media-player-card');
     const playerContainer = document.getElementById('player-iframe-container');
-    const playerTitle = document.getElementById('media-player-title') || document.getElementById('twitch-player-title');
+    const playerTitle = document.getElementById('media-player-title');
     const playerIcon = document.getElementById('player-type-icon');
-    const playerSelector = document.getElementById('player-selector');
 
     let activePlayerType = 'none'; // 'youtube', 'twitch', 'kick', 'html5', 'none'
     let currentEmbeddedMediaId = ''; // Track active video/VOD ID to prevent reloading iframe
@@ -1685,11 +1702,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.checkMediaUrlInput = function() {
         const detectedUrl = getPreferredActiveUrl();
         if (!detectedUrl) return;
-
-        const currentMode = playerSelector ? playerSelector.value : 'auto';
-        if (currentMode !== 'hidden') {
-            embedVideoPlayer(detectedUrl, currentMode);
-        }
+        embedVideoPlayer(detectedUrl, 'auto');
     };
 
     window.embedVideoPlayer = async function(url, forceMode = 'auto') {
@@ -1727,7 +1740,6 @@ document.addEventListener('DOMContentLoaded', () => {
             activePlayerType = 'youtube';
 
             if (mediaPlayerCard) mediaPlayerCard.classList.remove('hidden');
-            if (playerSelector) playerSelector.value = targetMode;
             if (playerTitle) playerTitle.textContent = `YouTube Player (ID: ${ytId})`;
             if (playerIcon) playerIcon.className = 'fa-brands fa-youtube player-icon yt';
 
@@ -1764,7 +1776,6 @@ document.addEventListener('DOMContentLoaded', () => {
             activePlayerType = 'twitch';
 
             if (mediaPlayerCard) mediaPlayerCard.classList.remove('hidden');
-            if (playerSelector) playerSelector.value = targetMode;
             if (playerIcon) playerIcon.className = 'fa-brands fa-twitch player-icon twitch';
 
             if (vodMatch && vodMatch[1]) {
@@ -1828,7 +1839,6 @@ document.addEventListener('DOMContentLoaded', () => {
             activePlayerType = 'kick';
 
             if (mediaPlayerCard) mediaPlayerCard.classList.remove('hidden');
-            if (playerSelector) playerSelector.value = 'kick';
             if (playerIcon) playerIcon.className = 'fa-solid fa-bolt player-icon kick';
 
             if (kickVodId || kickClipId) {
@@ -1859,21 +1869,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    window.switchPlayerMode = function(mode) {
-        if (mode === 'hidden') {
-            closeMediaPlayer();
-            return;
-        }
-
-        const activeUrl = getPreferredActiveUrl();
-        if (activeUrl) {
-            embedVideoPlayer(activeUrl, mode);
-        } else {
-            logToConsole('[Player] Please enter or paste a video link first to display the player.', 'system');
-        }
-    };
-
-    window.closeMediaPlayer = window.closeTwitchPlayer = function() {
+    window.closeMediaPlayer = function() {
         cleanupDirectHtml5Player();
         stopClipPreviewLoop(false);
         if (mediaPlayerCard) mediaPlayerCard.classList.add('hidden');
@@ -1882,7 +1878,6 @@ document.addEventListener('DOMContentLoaded', () => {
         currentEmbeddedMediaId = '';
         ytPlayerInstance = null;
         twitchPlayerInstance = null;
-        if (playerSelector) playerSelector.value = 'hidden';
     };
 
     window.togglePlayerExpand = function() {
@@ -2161,21 +2156,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const bannerText = document.getElementById('captured-thumb-banner-text');
 
             const applyYtImgFallback = (imgEl) => {
-                const ytId = extractYtId(activeUrl);
-                if (!ytId) return;
-                imgEl.onerror = function() {
-                    let nextSrc = '';
-                    if (this.src.includes('maxresdefault.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/hq720.jpg`;
-                    else if (this.src.includes('hq720.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/sddefault.jpg`;
-                    else if (this.src.includes('sddefault.jpg')) nextSrc = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-                    if (nextSrc) {
-                        this.src = nextSrc;
-                        if (lastCapturedThumbData && isCover) {
-                            lastCapturedThumbData.thumbnailUrl = nextSrc;
-                            lastCapturedThumbData.downloadUrl = nextSrc;
-                        }
+                applyYouTubeCoverFallback(imgEl, extractYtId(activeUrl), (nextSrc) => {
+                    if (lastCapturedThumbData && isCover) {
+                        lastCapturedThumbData.thumbnailUrl = nextSrc;
+                        lastCapturedThumbData.downloadUrl = nextSrc;
                     }
-                };
+                });
             };
 
             if (img) {
@@ -2329,14 +2315,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const syncBlob = dataUrlToBlob(downloadUrl);
             const blob = syncBlob || await (await fetch(downloadUrl)).blob();
             const url = URL.createObjectURL(blob);
-            showDownloadReadyBar(url, filename);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            triggerFileDownload(url, filename, { revokeMs: 60000, showReadyBar: true });
             logToConsole(`[Thumbnail Downloaded] Saved "${filename}" to your device (or tap "Save File" above on iPhone/Safari)!`, 'success');
         } catch (e) {
             window.open(downloadUrl, '_blank');
@@ -2356,17 +2335,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             logToConsole('[Clipboard] Right-click the image or click Download JPG to save.', 'system');
         }
-    };
-
-    window.sendCapturedThumbToClipper = function() {
-        if (!lastCapturedThumbData) return;
-        const secStart = document.getElementById('section-start');
-        if (secStart) {
-            secStart.value = lastCapturedThumbData.timestamp;
-            secStart.dispatchEvent(new Event('input'));
-        }
-        activateTab('tab-section-clipper');
-        logToConsole(`[Clipper Synced] Set Section Clipper start time to captured frame: ${lastCapturedThumbData.timestamp}`, 'success');
     };
 
     window.syncThumbnailTimeFromPlayer = function() {
@@ -2820,7 +2788,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const resultsCard = document.getElementById('extracted-results-card');
                 const resultsTitle = document.getElementById('results-card-title');
                 const resultsIcon = document.getElementById('results-card-icon');
-                const tagsCloud = document.getElementById('results-tags-cloud');
                 const textBox = document.getElementById('results-text-box');
 
                 if (!tagsUrl) {
@@ -3020,14 +2987,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 logToConsole(`[Saved] Successfully saved file to: "${activeFileHandle.name}"!`, 'success');
                                                 activeFileHandle = null;
                                             } else {
-                                                showDownloadReadyBar(dlUrl, fname);
-                                                const a = document.createElement('a');
-                                                a.href = dlUrl;
-                                                a.download = fname;
-                                                a.style.display = 'none';
-                                                document.body.appendChild(a);
-                                                a.click();
-                                                document.body.removeChild(a);
+                                                triggerFileDownload(dlUrl, fname, { showReadyBar: true });
                                                 logToConsole(`[Saved] Download started for "${fname}" (tap "Save File" above if iOS Safari waits for confirmation).`, 'success');
                                             }
                                         } catch (dlErr) {
@@ -3327,14 +3287,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
-        showDownloadReadyBar(url, filename);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        triggerFileDownload(url, filename, { revokeMs: 60000, showReadyBar: true });
         logToConsole(`[Downloaded] Saved "${filename}"!`, 'success');
     };
 
@@ -3521,24 +3474,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!res) throw new Error('No YouTube cover image returned HTTP 200');
                 const blob = await res.blob();
                 const blobUrl = URL.createObjectURL(blob);
-                showDownloadReadyBar(blobUrl, filename);
-                const a = document.createElement('a');
-                a.href = blobUrl;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                triggerFileDownload(blobUrl, filename, { revokeMs: 60000, showReadyBar: true });
                 logToConsole(`[Thumbnail Downloaded] Saved official cover "${filename}" (${Math.round(blob.size / 1024)} KB)!`, 'success');
                 return;
             } catch (e) {
-                const a = document.createElement('a');
-                a.href = coverUrls[0];
-                a.target = '_blank';
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                triggerFileDownload(coverUrls[0], filename, { showReadyBar: false, newTab: true });
                 logToConsole(`[Thumbnail] Direct download initiated for default cover.`, 'info');
                 return;
             }
@@ -3558,14 +3498,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const blob = await imgRes.blob();
                 const blobUrl = URL.createObjectURL(blob);
                 const outName = data.filename || filename;
-                showDownloadReadyBar(blobUrl, outName);
-                const a = document.createElement('a');
-                a.href = blobUrl;
-                a.download = outName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                triggerFileDownload(blobUrl, outName, { revokeMs: 60000, showReadyBar: true });
                 logToConsole(`[Thumbnail Downloaded] Saved official high-resolution default cover "${outName}"!`, 'success');
             } else {
                 throw new Error(data?.error || 'Failed to fetch default cover');
@@ -3590,19 +3523,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const maxRes = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
             const thumbImg = document.getElementById('thumb-preview-img');
             if (thumbImg) {
-                thumbImg.onerror = function() {
-                    let next = '';
-                    if (this.src.includes('maxresdefault.jpg')) next = `https://img.youtube.com/vi/${ytId}/hq720.jpg`;
-                    else if (this.src.includes('hq720.jpg')) next = `https://img.youtube.com/vi/${ytId}/sddefault.jpg`;
-                    else if (this.src.includes('sddefault.jpg')) next = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-                    if (next) {
-                        this.src = next;
-                        if (lastCapturedThumbData) {
-                            lastCapturedThumbData.thumbnailUrl = next;
-                            lastCapturedThumbData.downloadUrl = next;
-                        }
+                applyYouTubeCoverFallback(thumbImg, ytId, (next) => {
+                    if (lastCapturedThumbData) {
+                        lastCapturedThumbData.thumbnailUrl = next;
+                        lastCapturedThumbData.downloadUrl = next;
                     }
-                };
+                });
                 thumbImg.src = maxRes;
             }
             const thumbCap = document.getElementById('thumb-preview-caption');
@@ -3646,24 +3572,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    window.sendThumbToClipper = function() {
-        const timeVal = document.getElementById('thumb-timestamp')?.value.trim() || (lastCapturedThumbData ? lastCapturedThumbData.timestamp : '');
-        const urlVal = document.getElementById('thumb-url')?.value.trim();
-        if (urlVal) {
-            const secUrl = document.getElementById('section-url');
-            if (secUrl) secUrl.value = urlVal;
-        }
-        if (timeVal) {
-            const secStart = document.getElementById('section-start');
-            if (secStart) {
-                secStart.value = timeVal;
-                secStart.dispatchEvent(new Event('input'));
-            }
-        }
-        activateTab('tab-section-clipper');
-        logToConsole(`[Clipper Synced] Loaded URL and timestamp ${timeVal || '00:00:00'} into Section Clipper`, 'success');
-    };
-
     window.updateRobocopyMode = function(mode) {
         const flagsElem = document.getElementById('robocopy-flags-display');
         const hintElem = document.getElementById('robocopy-hint-display');
@@ -3675,25 +3583,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (hintElem) hintElem.innerHTML = '🛡️ Copies subdirectories and newer files without deleting any existing files on your external drive.';
         }
         updateGeneratedCommand();
-    };
-
-    window.setDesktopPreset = function(inputId) {
-        const inputElem = document.getElementById(inputId);
-        if (!inputElem) return;
-
-        let currentVal = inputElem.value.trim();
-        let filenamePart = '%(title)s.mp4';
-
-        if (currentVal.includes('%(title)s')) {
-            filenamePart = currentVal.includes('/') || currentVal.includes('\\') ? currentVal.substring(Math.max(currentVal.lastIndexOf('/'), currentVal.lastIndexOf('\\')) + 1) : '%(title)s.mp4';
-        } else if (currentVal.endsWith('.mp4')) {
-            filenamePart = currentVal.includes('/') || currentVal.includes('\\') ? currentVal.substring(Math.max(currentVal.lastIndexOf('/'), currentVal.lastIndexOf('\\')) + 1) : 'clip.mp4';
-        }
-
-        inputElem.value = `downloads/Clips/${filenamePart}`;
-        inputElem.dispatchEvent(new Event('input'));
-        updateGeneratedCommand();
-        logToConsole('[Folder Preset Set] Target destination configured to "downloads/Clips/"', 'success');
     };
 
     // --- YouTube Cookie Manager ---

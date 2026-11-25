@@ -2,14 +2,82 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { exec, execFile, spawn, execSync } = require('child_process');
+const zlib = require('zlib');
+const { exec, execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const crypto = require('crypto');
 const urlModule = require('url');
 
-// Token map: token -> { absPath, expires }
+// Token map: token -> { absPath, jobDir, expires, cleanupTimer }
 const downloadTokens = new Map();
+
+function setBoundedCache(map, key, value, maxSize = 60) {
+    const now = Date.now();
+    for (const [k, v] of map) {
+        if (v && v.expires && v.expires < now) map.delete(k);
+    }
+    while (map.size >= maxSize) {
+        const oldestKey = map.keys().next().value;
+        map.delete(oldestKey);
+    }
+    map.set(key, value);
+}
+
+function readJsonBody(req, maxBytes = 2 * 1024 * 1024) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let total = 0;
+        let aborted = false;
+        req.on('data', chunk => {
+            if (aborted) return;
+            total += chunk.length;
+            if (total > maxBytes) {
+                aborted = true;
+                const err = new Error('Payload too large');
+                err.statusCode = 413;
+                return reject(err);
+            }
+            chunks.push(chunk);
+        });
+        req.on('end', () => {
+            if (aborted) return;
+            try {
+                const raw = Buffer.concat(chunks).toString('utf8');
+                resolve(raw ? JSON.parse(raw) : {});
+            } catch (e) {
+                const err = new Error('Invalid JSON payload');
+                err.statusCode = 400;
+                reject(err);
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
+// Strict static file allowlist + in-memory gzip/ETag cache (never exposes cookies.txt, server.js, .env, .git, etc.)
+const STATIC_PUBLIC_FILES = new Map([
+    ['/index.html', 'text/html; charset=utf-8'],
+    ['/app.js', 'application/javascript; charset=utf-8'],
+    ['/style.css', 'text/css; charset=utf-8']
+]);
+const staticAssetCache = new Map(); // pathname -> { mtimeMs, raw, gzip, etag, contentType }
+
+function getStaticAsset(pathname) {
+    const contentType = STATIC_PUBLIC_FILES.get(pathname);
+    if (!contentType) return null;
+    const filePath = path.join(PUBLIC_DIR, pathname.slice(1));
+    const stat = fs.statSync(filePath);
+    const cached = staticAssetCache.get(pathname);
+    if (cached && cached.mtimeMs === stat.mtimeMs) return cached;
+
+    const raw = fs.readFileSync(filePath);
+    const gzip = zlib.gzipSync(raw, { level: 6 });
+    const etag = `"${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16)}"`;
+    const entry = { mtimeMs: stat.mtimeMs, raw, gzip, etag, contentType };
+    staticAssetCache.set(pathname, entry);
+    return entry;
+}
 
 let PORT = parseInt(process.env.PORT, 10) || 3005;
 const PUBLIC_DIR = __dirname;
@@ -520,7 +588,7 @@ async function fetchTwitchClipPreviewUrl(slug) {
                               clip.videoQualities.find(v => v.quality === '360') ||
                               clip.videoQualities[clip.videoQualities.length - 1];
                     const directUrl = `${q.sourceURL}?sig=${sig}&token=${token}`;
-                    clipPreviewCache.set(cleanSlug, { expires: Date.now() + CLIP_PREVIEW_CACHE_MS, url: directUrl });
+                    setBoundedCache(clipPreviewCache, cleanSlug, { expires: Date.now() + CLIP_PREVIEW_CACHE_MS, url: directUrl }, 80);
                     resolve(directUrl);
                 } catch (e) {
                     reject(e);
@@ -532,43 +600,6 @@ async function fetchTwitchClipPreviewUrl(slug) {
         req.write(payload);
         req.end();
     });
-}
-
-const MIME_TYPES = {
-    '.html': 'text/html',
-    '.css': 'text/css',
-    '.js': 'text/javascript',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon'
-};
-
-function processLogs(rawText, defaultType = 'info') {
-    if (!rawText) return [];
-    const rawLines = rawText.split(/[\r\n]+/);
-    const logs = [];
-    let lastProgressIndex = -1;
-
-    for (let line of rawLines) {
-        line = line.trim();
-        if (!line) continue;
-
-        // Filter and update progress lines to prevent thousands of duplicate DOM lines
-        if (line.startsWith('[download]') && line.includes('%')) {
-            if (lastProgressIndex !== -1) {
-                logs[lastProgressIndex] = { text: line, type: 'info', isProgress: true };
-            } else {
-                lastProgressIndex = logs.length;
-                logs.push({ text: line, type: 'info', isProgress: true });
-            }
-        } else {
-            lastProgressIndex = -1;
-            logs.push({ text: line, type: defaultType });
-        }
-    }
-    return logs;
 }
 
 function parseTimestampToSeconds(ts) {
@@ -680,7 +711,7 @@ async function resolveBestYouTubeCover(videoId) {
         const ok = await checkImageExistsHead(c.url);
         if (ok) {
             const entry = { ...c, expires: Date.now() + 15 * 60 * 1000 };
-            ytCoverCache.set(videoId, entry);
+            setBoundedCache(ytCoverCache, videoId, entry, 80);
             return entry;
         }
     }
@@ -688,11 +719,7 @@ async function resolveBestYouTubeCover(videoId) {
 }
 
 function setBoundedStoryboardCache(videoId, sbInfo) {
-    if (ytStoryboardCache.size >= 30) {
-        const oldestKey = ytStoryboardCache.keys().next().value;
-        ytStoryboardCache.delete(oldestKey);
-    }
-    ytStoryboardCache.set(videoId, { info: sbInfo, expires: Date.now() + 30 * 60 * 1000 });
+    setBoundedCache(ytStoryboardCache, videoId, { info: sbInfo, expires: Date.now() + 30 * 60 * 1000 }, 30);
 }
 
 async function getYouTubeStoryboard(videoId, { skipYtdlp = false } = {}) {
@@ -868,7 +895,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
                         if (matched && matched[0]) {
                             streamUrl = matched[0];
                             if (att.useCookies) cookiesRejectedByYouTube = false;
-                            ytStreamCache.set(videoId, { url: streamUrl, expires: Date.now() + 5 * 60 * 1000 });
+                            setBoundedCache(ytStreamCache, videoId, { url: streamUrl, expires: Date.now() + 5 * 60 * 1000 }, 40);
                             break;
                         }
                     } catch (attErr) {
@@ -1029,11 +1056,7 @@ async function extractYouTubeTimestampFrame(videoId, targetSeconds, format = 'jp
     try {
         const result = await workPromise;
         if (result && result.base64Url) {
-            if (ytFrameResultCache.size >= 8) {
-                const oldestKey = ytFrameResultCache.keys().next().value;
-                ytFrameResultCache.delete(oldestKey);
-            }
-            ytFrameResultCache.set(dedupeKey, { data: result, expires: Date.now() + 2 * 60 * 1000 });
+            setBoundedCache(ytFrameResultCache, dedupeKey, { data: result, expires: Date.now() + 2 * 60 * 1000 }, 8);
         }
         return result;
     } finally {
@@ -1063,47 +1086,6 @@ const server = http.createServer((req, res) => {
     <priority>1.0</priority>
   </url>
 </urlset>`);
-    }
-
-    // API Downloads List
-    if (pathname === '/api/downloads' && req.method === 'GET') {
-        try {
-            const downloadsDir = path.join(__dirname, 'downloads');
-            if (!fs.existsSync(downloadsDir)) {
-                fs.mkdirSync(downloadsDir, { recursive: true });
-            }
-
-            const files = [];
-
-            const scanDir = (dirPath) => {
-                const items = fs.readdirSync(dirPath, { withFileTypes: true });
-                for (const item of items) {
-                    const fullPath = path.join(dirPath, item.name);
-                    if (item.isDirectory()) {
-                        scanDir(fullPath);
-                    } else if (item.isFile()) {
-                        if (item.name.endsWith('.part') || item.name.endsWith('.ytdl') || item.name.startsWith('.')) continue;
-
-                        const stats = fs.statSync(fullPath);
-                        const relPath = path.relative(downloadsDir, fullPath).replace(/\\/g, '/');
-
-                        files.push({
-                            name: item.name,
-                            relPath: relPath,
-                            size: stats.size,
-                            mtime: stats.mtimeMs
-                        });
-                    }
-                }
-            };
-
-            scanDir(downloadsDir);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ totalFiles: files.length, files }, null, 2));
-        } catch (e) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: e.message }));
-        }
     }
 
     // API Health Check
@@ -1152,9 +1134,8 @@ const server = http.createServer((req, res) => {
                 nextCursor: result.nextCursor || null
             };
             if (data.videos && data.videos.length > 0) {
-                channelVideosCache.set(cacheKey, { expires: Date.now() + CHANNEL_CACHE_MS, data });
+                setBoundedCache(channelVideosCache, cacheKey, { expires: Date.now() + CHANNEL_CACHE_MS, data }, 40);
             }
-            for (const [k, v] of channelVideosCache) if (v.expires < Date.now()) channelVideosCache.delete(k);
             sendJson(200, data);
         }).catch(err => {
             console.error(`[Server Channel Browser Error]: ${err.message}`);
@@ -1222,15 +1203,11 @@ const server = http.createServer((req, res) => {
 
     // API Command Execution Endpoint (Chunked Real-Time Progress Stream)
     if (pathname === '/api/execute' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const { command, tabId, cropMode } = JSON.parse(body);
-                if (!command) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Command required' }));
-                }
+        readJsonBody(req).then(({ command, tabId, cropMode }) => {
+            if (!command) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'Command required' }));
+            }
 
                 const singleFileTabs = new Set(['tab-quick-download', 'tab-section-clipper', 'tab-silence-cutter', 'tab-file-converter']);
                 const isolateJob = singleFileTabs.has(tabId) || (!tabId && !command.includes('robocopy') && !command.includes('/shorts') && !command.includes('/yt-sections'));
@@ -1263,14 +1240,8 @@ const server = http.createServer((req, res) => {
                 let sectionDurationSec = 0;
                 const sectionMatch = finalCommand.match(/--download-sections\s+["']?\*?([0-9:]+(?:\.[0-9]+)?)-([0-9:]+(?:\.[0-9]+)?)/i);
                 if (sectionMatch) {
-                    const parseTimeToSec = (tStr) => {
-                        const parts = (tStr || '').trim().split(':').map(Number);
-                        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-                        if (parts.length === 2) return parts[0] * 60 + parts[1];
-                        return parseFloat(tStr) || 0;
-                    };
-                    const sStart = parseTimeToSec(sectionMatch[1]);
-                    const sEnd = parseTimeToSec(sectionMatch[2]);
+                    const sStart = parseTimestampToSeconds(sectionMatch[1]);
+                    const sEnd = parseTimestampToSeconds(sectionMatch[2]);
                     if (sEnd > sStart) {
                         sectionDurationSec = sEnd - sStart;
                         console.log(`[Server] Detected clip target duration: ${sectionDurationSec}s (${sectionMatch[1]} to ${sectionMatch[2]})`);
@@ -1359,13 +1330,7 @@ const server = http.createServer((req, res) => {
                                 const ffmpegSpeedMatch = trimmed.match(/speed=\s*([0-9\.]+)x/i);
 
                                 if (timeMatch) {
-                                    const parseTimeToSec = (tStr) => {
-                                        const parts = (tStr || '').trim().split(':').map(Number);
-                                        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-                                        if (parts.length === 2) return parts[0] * 60 + parts[1];
-                                        return parseFloat(tStr) || 0;
-                                    };
-                                    const curSec = parseTimeToSec(timeMatch[1]);
+                                    const curSec = parseTimestampToSeconds(timeMatch[1]);
                                     if (sectionDurationSec > 0) {
                                         const calcPercent = Math.min(99.5, Math.max(0.1, (curSec / sectionDurationSec) * 100));
                                         percentMatch = [null, calcPercent.toFixed(1)];
@@ -1543,8 +1508,7 @@ const server = http.createServer((req, res) => {
                                         const t = d.toString();
                                         const m = t.match(/time=\s*([0-9:]+(?:\.[0-9]+)?)/i);
                                         if (m && sectionDurationSec > 0) {
-                                            const parts = m[1].split(':').map(Number);
-                                            const sec = parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : (parts.length === 2 ? parts[0] * 60 + parts[1] : parseFloat(m[1]) || 0);
+                                            const sec = parseTimestampToSeconds(m[1]);
                                             const pct = Math.min(99.5, 90 + (sec / sectionDurationSec) * 9.5);
                                             res.write(JSON.stringify({ percent: parseFloat(pct.toFixed(1)), speed: 'FFmpeg 9:16', eta: 'Encoding' }) + '\n');
                                         }
@@ -1578,10 +1542,10 @@ const server = http.createServer((req, res) => {
                 };
 
                 runExecAttempt(finalCommand, { allowCookieRetry: true });
-
-            } catch (err) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid payload' }));
+        }).catch(err => {
+            if (!res.headersSent) {
+                res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message || 'Invalid payload' }));
             }
         });
         return;
@@ -1688,44 +1652,40 @@ const server = http.createServer((req, res) => {
 
     // API Check File Existence Endpoint
     if (pathname === '/api/check-file' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const { filePath } = JSON.parse(body);
-                if (!filePath) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'filePath required' }));
-                }
-
-                let targetPath = filePath;
-                if (targetPath.startsWith('%USERPROFILE%')) {
-                    targetPath = targetPath.replace('%USERPROFILE%', process.env.USERPROFILE || '');
-                }
-                const resolvedPath = path.isAbsolute(targetPath) ? targetPath : path.join(PUBLIC_DIR, targetPath);
-
-                const exists = fs.existsSync(resolvedPath);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, exists, fileName: path.basename(resolvedPath) }));
-            } catch (err) {
+        readJsonBody(req).then(({ filePath }) => {
+            if (!filePath) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid payload' }));
+                return res.end(JSON.stringify({ error: 'filePath required' }));
             }
+
+            let targetPath = String(filePath);
+            if (targetPath.startsWith('%USERPROFILE%')) {
+                targetPath = targetPath.replace('%USERPROFILE%', process.env.USERPROFILE || '');
+            }
+            const resolvedPath = path.resolve(path.isAbsolute(targetPath) ? targetPath : path.join(PUBLIC_DIR, targetPath));
+            // On Linux/cloud hosts, only allow checking files inside downloads/
+            if (process.platform !== 'win32' && !resolvedPath.startsWith(DOWNLOADS_DIR + path.sep)) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: true, exists: false, fileName: path.basename(resolvedPath) }));
+            }
+
+            const exists = fs.existsSync(resolvedPath);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, exists, fileName: path.basename(resolvedPath) }));
+        }).catch(err => {
+            res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message || 'Invalid payload' }));
         });
         return;
     }
 
     // API Fast Thumbnail Fetching Endpoint (YouTube direct / storyboard, Twitch GQL, Kick API - No Python!)
-    if ((pathname === '/api/extract-thumbnail' || pathname === '/api/fetch-thumbnail') && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', async () => {
-            try {
-                const { url, timestamp, title, format } = JSON.parse(body);
-                if (!url) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ success: false, error: 'URL required' }));
-                }
+    if (pathname === '/api/fetch-thumbnail' && req.method === 'POST') {
+        readJsonBody(req).then(async ({ url, timestamp, title, format }) => {
+            if (!url) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, error: 'URL required' }));
+            }
 
                 const outExt = String(format || 'jpg').toLowerCase() === 'png' ? 'png' : 'jpg';
                 console.log(`[Server Fetching Thumbnail]: ${url} (timestamp: ${timestamp || 'default cover'}, format: ${outExt})`);
@@ -1937,9 +1897,10 @@ const server = http.createServer((req, res) => {
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Could not fetch thumbnail for this URL' }));
-            } catch (err) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+        }).catch(err => {
+            if (!res.headersSent) {
+                res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message || 'Invalid payload' }));
             }
         });
         return;
@@ -1947,15 +1908,11 @@ const server = http.createServer((req, res) => {
 
     // API Full Metadata & Tags Fetching Endpoint
     if (pathname === '/api/fetch-metadata' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const { url } = JSON.parse(body);
-                if (!url) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'URL required' }));
-                }
+        readJsonBody(req).then(({ url }) => {
+            if (!url) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'URL required' }));
+            }
 
                 console.log(`[Server Fetching Full Metadata & Tags]: ${url}`);
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
@@ -2029,9 +1986,10 @@ const server = http.createServer((req, res) => {
                         res.end(JSON.stringify({ success: false, error: 'Failed to parse video JSON' }));
                     }
                 });
-            } catch (err) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid payload' }));
+        }).catch(err => {
+            if (!res.headersSent) {
+                res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message || 'Invalid payload' }));
             }
         });
         return;
@@ -2039,15 +1997,11 @@ const server = http.createServer((req, res) => {
 
     // API Subtitle & Transcript Fetching Endpoint (YouTube Instant + Local Whisper AI for Twitch/Kick)
     if (pathname === '/api/fetch-transcript' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const { url, start, end, full } = JSON.parse(body);
-                if (!url) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'URL required' }));
-                }
+        readJsonBody(req).then(({ url, start, end, full }) => {
+            if (!url) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'URL required' }));
+            }
 
                 console.log(`[Server Transcript Request]: ${url} (Range: ${start || '00:00:00'} - ${end || (full ? 'Full' : 'Default')})`);
 
@@ -2262,9 +2216,10 @@ const server = http.createServer((req, res) => {
                         res.end();
                     });
                 }
-            } catch (err) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid payload' }));
+        }).catch(err => {
+            if (!res.headersSent) {
+                res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message || 'Invalid payload' }));
             }
         });
         return;
@@ -2272,15 +2227,11 @@ const server = http.createServer((req, res) => {
 
     // API Title Fetching Endpoint
     if (pathname === '/api/fetch-title' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const { url } = JSON.parse(body);
-                if (!url) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'URL required' }));
-                }
+        readJsonBody(req).then(({ url }) => {
+            if (!url) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: 'URL required' }));
+            }
 
                 console.log(`[Server Fetching Title]: ${url}`);
                 const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
@@ -2325,9 +2276,10 @@ const server = http.createServer((req, res) => {
                         res.end(JSON.stringify({ success: true, title }));
                     });
                 }
-            } catch (err) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid payload' }));
+        }).catch(err => {
+            if (!res.headersSent) {
+                res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message || 'Invalid payload' }));
             }
         });
         return;
@@ -2361,54 +2313,49 @@ const server = http.createServer((req, res) => {
 
     // API Upload / Update Cookies Endpoint (Save new cookies or clear expired ones)
     if (pathname === '/api/upload-cookies' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const { cookies, action } = JSON.parse(body);
-                const cookiesPath = path.join(__dirname, 'cookies.txt');
-                const resetYouTubeCookieCaches = () => {
-                    cookiesRejectedByYouTube = false;
-                    ytStreamCache.clear();
-                    ytStoryboardCache.clear();
-                    ytFrameResultCache.clear();
-                };
+        readJsonBody(req).then(({ cookies, action }) => {
+            const cookiesPath = path.join(__dirname, 'cookies.txt');
+            const resetYouTubeCookieCaches = () => {
+                cookiesRejectedByYouTube = false;
+                ytStreamCache.clear();
+                ytStoryboardCache.clear();
+                ytFrameResultCache.clear();
+            };
 
-                if (action === 'clear') {
-                    cookiesDisabled = true;
-                    resetYouTubeCookieCaches();
-                    if (fs.existsSync(cookiesPath)) {
-                        try { fs.unlinkSync(cookiesPath); } catch (e) {}
-                    }
-                    console.log('[Cookies] Cleared & disabled cookies via web UI');
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ success: true, message: 'Cookies cleared & disabled' }));
-                }
-
-                if (action === 'toggle') {
-                    cookiesDisabled = !cookiesDisabled;
-                    resetYouTubeCookieCaches();
-                    console.log(`[Cookies] Toggled cookies: ${cookiesDisabled ? 'DISABLED' : 'ENABLED'}`);
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ success: true, disabled: cookiesDisabled }));
-                }
-
-                if (!cookies || typeof cookies !== 'string' || cookies.trim().length < 10) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ success: false, error: 'Valid cookies text required' }));
-                }
-
-                const cleanCookies = cookies.trim();
-                fs.writeFileSync(cookiesPath, cleanCookies, 'utf8');
-                cookiesDisabled = false;
+            if (action === 'clear') {
+                cookiesDisabled = true;
                 resetYouTubeCookieCaches();
-                console.log(`[Cookies] Saved new cookies.txt (${cleanCookies.length} bytes) via web UI`);
+                if (fs.existsSync(cookiesPath)) {
+                    try { fs.unlinkSync(cookiesPath); } catch (e) {}
+                }
+                console.log('[Cookies] Cleared & disabled cookies via web UI');
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, message: `Successfully saved cookies (${cleanCookies.length} bytes)` }));
-            } catch (err) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+                return res.end(JSON.stringify({ success: true, message: 'Cookies cleared & disabled' }));
             }
+
+            if (action === 'toggle') {
+                cookiesDisabled = !cookiesDisabled;
+                resetYouTubeCookieCaches();
+                console.log(`[Cookies] Toggled cookies: ${cookiesDisabled ? 'DISABLED' : 'ENABLED'}`);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: true, disabled: cookiesDisabled }));
+            }
+
+            if (!cookies || typeof cookies !== 'string' || cookies.trim().length < 10) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, error: 'Valid cookies text required' }));
+            }
+
+            const cleanCookies = cookies.trim();
+            fs.writeFileSync(cookiesPath, cleanCookies, 'utf8');
+            cookiesDisabled = false;
+            resetYouTubeCookieCaches();
+            console.log(`[Cookies] Saved new cookies.txt (${cleanCookies.length} bytes) via web UI`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: `Successfully saved cookies (${cleanCookies.length} bytes)` }));
+        }).catch(err => {
+            res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message || 'Invalid payload' }));
         });
         return;
     }
@@ -2459,34 +2406,42 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Serve Static Files
+    // Serve Static Files (strict allowlist + in-memory gzip & ETag cache; never serves cookies.txt, server.js, .env, .git, etc.)
     if (pathname === '/') pathname = '/index.html';
-    const filePath = path.join(PUBLIC_DIR, pathname);
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-
-    fs.readFile(filePath, (err, content) => {
-        if (err) {
-            if (err.code === 'ENOENT') {
-                res.writeHead(404, { 'Content-Type': 'text/html' });
-                res.end('<h1>404 Not Found</h1>');
-            } else {
-                res.writeHead(500);
-                res.end(`Server Error: ${err.code}`);
-            }
-        } else {
-            // Prevent browser caching for application code so deployments on Render reflect immediately
-            const isCodeAsset = ext === '.js' || ext === '.css' || ext === '.html';
-            const headers = { 'Content-Type': contentType };
-            if (isCodeAsset) {
-                headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
-                headers['Pragma'] = 'no-cache';
-                headers['Expires'] = '0';
-            }
-            res.writeHead(200, headers);
-            res.end(content, 'utf-8');
+    try {
+        const asset = getStaticAsset(pathname);
+        if (!asset) {
+            res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end('<h1>404 Not Found</h1>');
         }
-    });
+
+        const headers = {
+            'Content-Type': asset.contentType,
+            'ETag': asset.etag,
+            'Vary': 'Accept-Encoding',
+            'Cache-Control': 'no-cache, must-revalidate'
+        };
+
+        if (req.headers['if-none-match'] === asset.etag) {
+            res.writeHead(304, headers);
+            return res.end();
+        }
+
+        const acceptEnc = String(req.headers['accept-encoding'] || '');
+        if (acceptEnc.includes('gzip')) {
+            headers['Content-Encoding'] = 'gzip';
+            headers['Content-Length'] = asset.gzip.length;
+            res.writeHead(200, headers);
+            return res.end(asset.gzip);
+        }
+
+        headers['Content-Length'] = asset.raw.length;
+        res.writeHead(200, headers);
+        res.end(asset.raw);
+    } catch (err) {
+        res.writeHead(err.code === 'ENOENT' ? 404 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(err.code === 'ENOENT' ? 'Not Found' : `Server Error: ${err.code || 'READ_FAILED'}`);
+    }
 });
 
 function startServer(portToUse) {
