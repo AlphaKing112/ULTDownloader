@@ -1995,227 +1995,463 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // API Subtitle & Transcript Fetching Endpoint (YouTube Instant + Local Whisper AI for Twitch/Kick)
+    // API Subtitle & AI Speech Transcript Endpoint (Whisper AI + Voice Speaker Detection across YouTube/Twitch/Kick + Fast YouTube Captions)
     if (pathname === '/api/fetch-transcript' && req.method === 'POST') {
-        readJsonBody(req).then(({ url, start, end, full }) => {
+        readJsonBody(req).then(({ url, start, end, full, engine, detectSpeakers, language, title }) => {
             if (!url) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ error: 'URL required' }));
             }
 
-                console.log(`[Server Transcript Request]: ${url} (Range: ${start || '00:00:00'} - ${end || (full ? 'Full' : 'Default')})`);
+            const lowerUrl = String(url).toLowerCase();
+            const isYouTube = lowerUrl.includes('youtube.com') || lowerUrl.includes('youtu.be');
+            const isTwitch = lowerUrl.includes('twitch.tv');
+            const isKick = lowerUrl.includes('kick.com');
+            const platform = isYouTube
+                ? 'youtube'
+                : (isTwitch
+                    ? ((lowerUrl.includes('clips.twitch.tv/') || lowerUrl.includes('/clip/')) ? 'twitch_clip' : (/twitch\.tv\/videos\/\d+/i.test(url) ? 'twitch_vod' : 'twitch'))
+                    : (isKick
+                        ? ((lowerUrl.includes('/clips/') || lowerUrl.includes('clip=')) ? 'kick_clip' : ((lowerUrl.includes('/video/') || lowerUrl.includes('/videos/') || lowerUrl.includes('video=')) ? 'kick_vod' : 'kick'))
+                        : 'other'));
 
-                const isYouTube = url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be');
-                const rangeStartSec = start ? parseTimestampToSeconds(start) : 0;
-                const rangeEndSec = (end && String(end).toLowerCase() !== 'full') ? parseTimestampToSeconds(end) : 0;
-                const hasRange = Boolean(!full && rangeEndSec > rangeStartSec);
+            const chosenEngine = (engine === 'captions' && isYouTube) ? 'captions' : 'whisper';
+            const wantSpeakers = detectSpeakers !== false;
+            const chosenLang = (language === 'auto') ? 'auto' : 'en';
 
-                // Try YouTube .vtt subtitle extraction first (fast + interactive timestamps, filtered to range if requested)
-                if (isYouTube) {
-                    const cleanUrl = url.replace(/"/g, '\\"');
-                    const subDir = path.join(DOWNLOADS_DIR, `.sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`);
-                    fs.mkdirSync(subDir, { recursive: true });
-                    const subOutTpl = path.join(subDir, 'sub').replace(/\\/g, '/');
-                    const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-format vtt --sub-lang "en.*,en" --skip-download -o "${subOutTpl}" "${cleanUrl}"`;
+            console.log(`[Server Transcript Request]: ${url} (Platform: ${platform}, Engine: ${chosenEngine}, Speakers: ${wantSpeakers}, Lang: ${chosenLang}, Range: ${start || '00:00:00'} - ${end || (full ? 'Full' : 'Default')})`);
 
-                    exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
-                        let subOut = '';
-                        let vttFiles = [];
-                        try {
-                            if (fs.existsSync(subDir)) {
-                                vttFiles = fs.readdirSync(subDir).filter(f => f.toLowerCase().endsWith('.vtt')).sort((a, b) => a.length - b.length);
-                                if (vttFiles.length > 0) {
-                                    subOut = fs.readFileSync(path.join(subDir, vttFiles[0]), 'utf8').trim();
-                                }
-                            }
-                        } catch (e) {
-                        } finally {
-                            try { fs.rmSync(subDir, { recursive: true, force: true }); } catch (e) {}
-                        }
+            const rangeStartSec = start ? parseTimestampToSeconds(start) : 0;
+            const rangeEndSec = (end && String(end).toLowerCase() !== 'full') ? parseTimestampToSeconds(end) : 0;
+            const hasRange = Boolean(!full && rangeEndSec > rangeStartSec);
 
-                        const errOut = (stderr || '').trim();
-                        const hasSubtitleCues = subOut.includes('-->') || subOut.startsWith('WEBVTT');
-                        const cleanLines = [];
-                        const seenText = new Set();
+            let clientAborted = false;
+            let activeChild = null;
+            let headersSent = false;
 
-                        if (hasSubtitleCues) {
-                            const fmtVttSec = (s) => {
-                                const tot = Math.max(0, Math.floor(s));
-                                const h = Math.floor(tot / 3600);
-                                const m = Math.floor((tot % 3600) / 60);
-                                const sec = tot % 60;
-                                return h > 0
-                                    ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
-                                    : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-                            };
-                            const decodeEntities = (str) => str
-                                .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-                                .replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ');
-
-                            const blocks = subOut.split(/\r?\n\r?\n+/);
-                            for (const blk of blocks) {
-                                const blkLines = blk.split(/\r?\n/);
-                                const timeLineIdx = blkLines.findIndex(l => l.includes('-->'));
-                                if (timeLineIdx === -1) continue;
-                                const tm = blkLines[timeLineIdx].match(/([0-9:.]+)\s+-->\s+([0-9:.]+)/);
-                                if (!tm) continue;
-                                const sSec = parseTimestampToSeconds(tm[1].split('.')[0]);
-                                const eSec = parseTimestampToSeconds(tm[2].split('.')[0]);
-                                const rawDur = parseFloat(tm[2].split(':').pop()) - parseFloat(tm[1].split(':').pop());
-                                if (eSec === sSec && Math.abs(rawDur) < 0.05) continue; // skip 10ms VTT scroll snapshots
-                                if (hasRange && (eSec < rangeStartSec || sSec > rangeEndSec)) continue;
-
-                                const cueText = blkLines.slice(timeLineIdx + 1)
-                                    .map(l => decodeEntities(l.replace(/<[^>]*>/g, '')).trim())
-                                    .filter(Boolean)
-                                    .filter(l => !seenText.has(l) && (seenText.add(l), true))
-                                    .join(' ');
-                                if (cueText) {
-                                    cleanLines.push(`[${fmtVttSec(sSec)} - ${fmtVttSec(Math.max(sSec, eSec))}] ${cueText}`);
-                                }
-                            }
-                        }
-
-                        if (cleanLines.length > 0) {
-                            if (cmd.includes('--cookies')) cookiesRejectedByYouTube = false;
-                            console.log(`[Server YouTube Auto-Sub Extracted]: ${cleanLines.length} timestamped cue lines`);
-                            res.writeHead(200, {
-                                'Content-Type': 'application/x-ndjson; charset=utf-8',
-                                'Cache-Control': 'no-cache, no-transform',
-                                'Connection': 'keep-alive',
-                                'X-Accel-Buffering': 'no'
-                            });
-                            res.write(JSON.stringify({
-                                type: 'progress',
-                                percent: 100,
-                                status: 'Subtitles Extracted',
-                                speed: 'Instant',
-                                eta: '0s'
-                            }) + '\n');
-                            res.write(JSON.stringify({
-                                type: 'result',
-                                success: true,
-                                transcript: cleanLines.join('\n'),
-                                source: 'youtube-autosub'
-                            }) + '\n');
-                            return res.end();
-                        }
-
-                        if (!hasSubtitleCues && /not a bot|Sign in to confirm|cookies are no longer valid/i.test(errOut)) {
-                            if (cmd.includes('--cookies')) cookiesRejectedByYouTube = true;
-                            const lastErrLine = errOut.split(/[\r\n]+/).filter(Boolean).slice(-1)[0] || errOut.slice(0, 220);
-                            console.warn(`[Server Transcript Bot Gate]: ${lastErrLine}`);
-                            res.writeHead(200, {
-                                'Content-Type': 'application/x-ndjson; charset=utf-8',
-                                'Cache-Control': 'no-cache, no-transform',
-                                'Connection': 'keep-alive',
-                                'X-Accel-Buffering': 'no'
-                            });
-                            res.write(JSON.stringify({
-                                type: 'result',
-                                success: false,
-                                error: 'YouTube blocked this cloud IP ("Sign in to confirm you\'re not a bot"). Click Cookies (top right) to upload fresh YouTube cookies, then retry.'
-                            }) + '\n');
-                            return res.end();
-                        }
-
-                        // Fallback to local Whisper AI if YouTube had no subtitles
-                        runWhisperTranscription();
-                    });
-                } else {
-                    // Twitch, Kick, or YouTube range selections: Run local offline Whisper AI!
-                    runWhisperTranscription();
-                }
-
-                function runWhisperTranscription() {
-                    console.log(`[Server Running Local Whisper AI]: ${url}`);
-                    const pyArgs = [path.join(__dirname, 'transcribe_whisper.py'), url];
-                    if (start) pyArgs.push('--start', start);
-                    if (end) pyArgs.push('--end', end);
-                    if (full) pyArgs.push('--full');
-
+            const ensureNdjsonHeaders = () => {
+                if (!headersSent && !res.headersSent) {
+                    headersSent = true;
                     res.writeHead(200, {
                         'Content-Type': 'application/x-ndjson; charset=utf-8',
                         'Cache-Control': 'no-cache, no-transform',
                         'Connection': 'keep-alive',
                         'X-Accel-Buffering': 'no'
                     });
+                }
+            };
 
-                    // Send initial progress tick immediately
-                    res.write(JSON.stringify({
-                        type: 'progress',
-                        percent: 5,
-                        status: 'Connecting to media stream...',
-                        speed: 'Connecting...',
-                        eta: '--'
-                    }) + '\n');
+            const writeEvent = (obj) => {
+                if (clientAborted || res.writableEnded) return;
+                ensureNdjsonHeaders();
+                res.write(JSON.stringify(obj) + '\n');
+            };
 
-                    const child = spawn(PYTHON_BIN, pyArgs, { windowsHide: true });
-                    let stdoutData = '';
-                    let stderrData = '';
+            const finishStream = (obj) => {
+                if (clientAborted || res.writableEnded) return;
+                if (obj) writeEvent(obj);
+                res.end();
+            };
 
-                    child.stderr.on('data', data => {
-                        const text = data.toString();
-                        stderrData += text;
-                        const lines = text.split(/[\r\n]+/);
-                        for (const line of lines) {
-                            const trimmed = line.trim();
-                            if (!trimmed) continue;
-                            const match = trimmed.match(/\[WHISPER_PROGRESS:\s*([0-9.]+)%\s*\|\s*(.*?)\]/);
-                            if (match) {
-                                const percent = parseFloat(match[1]);
-                                const status = match[2];
-                                res.write(JSON.stringify({
-                                    type: 'progress',
-                                    percent: percent,
-                                    status: status,
-                                    speed: 'Whisper AI',
-                                    eta: `${Math.max(1, Math.round(100 - percent))}% left`
-                                }) + '\n');
+            res.on('close', () => {
+                if (!res.writableFinished) {
+                    clientAborted = true;
+                    if (activeChild && !activeChild.killed) {
+                        try { activeChild.kill('SIGTERM'); } catch (e) {}
+                    }
+                }
+            });
+
+            const parseYouTubeVtt = (subOut) => {
+                const fmtVttSec = (s) => {
+                    const tot = Math.max(0, Math.floor(s));
+                    const h = Math.floor(tot / 3600);
+                    const m = Math.floor((tot % 3600) / 60);
+                    const sec = tot % 60;
+                    return h > 0
+                        ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+                        : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+                };
+                const decodeEntities = (str) => str
+                    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                    .replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ');
+
+                const rawCues = [];
+                const recentLines = []; // rolling window of last 3 lines (avoids dropping repeated words later in the video!)
+                const blocks = subOut.split(/\r?\n\r?\n+/);
+
+                for (const blk of blocks) {
+                    const blkLines = blk.split(/\r?\n/);
+                    const timeLineIdx = blkLines.findIndex(l => l.includes('-->'));
+                    if (timeLineIdx === -1) continue;
+                    const tm = blkLines[timeLineIdx].match(/([0-9:.]+)\s+-->\s+([0-9:.]+)/);
+                    if (!tm) continue;
+                    const sSec = parseTimestampToSeconds(tm[1].split('.')[0]);
+                    const eSec = parseTimestampToSeconds(tm[2].split('.')[0]);
+                    const rawDur = parseFloat(tm[2].split(':').pop()) - parseFloat(tm[1].split(':').pop());
+                    if (eSec === sSec && Math.abs(rawDur) < 0.05) continue; // skip 10ms VTT scroll snapshots
+                    if (hasRange && (eSec < rangeStartSec || sSec > rangeEndSec)) continue;
+
+                    const freshParts = [];
+                    for (const rawLine of blkLines.slice(timeLineIdx + 1)) {
+                        const cleanLine = decodeEntities(rawLine.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+                        if (!cleanLine) continue;
+                        if (recentLines.includes(cleanLine)) continue;
+                        recentLines.push(cleanLine);
+                        if (recentLines.length > 3) recentLines.shift();
+                        freshParts.push(cleanLine);
+                    }
+
+                    const cueText = freshParts.join(' ').trim();
+                    if (cueText) {
+                        rawCues.push({ startSec: sSec, endSec: Math.max(sSec, eSec), text: cueText });
+                    }
+                }
+
+                // Parse speaker turns from >> markers, dialogue dashes (- ), and explicit Name: prefixes
+                let activeSpeaker = 1;
+                let hadSpeakerCues = false;
+                const namedSpeakerMap = new Map();
+                const idToLabel = new Map([[1, 'Speaker 1']]);
+                let nextNamedId = 1;
+
+                const parsedTurns = [];
+                for (const cue of rawCues) {
+                    let txt = cue.text;
+                    let explicitSwitch = false;
+
+                    // Check explicit "NAME: dialogue" or "[Name]: dialogue"
+                    const namedMatch = txt.match(/^(?:\[([A-Za-z][A-Za-z0-9 .'-]{1,22})\]|([A-Z][A-Za-z0-9 .'-]{1,20})):\s+(.+)$/);
+                    if (namedMatch) {
+                        const rawName = (namedMatch[1] || namedMatch[2] || '').trim();
+                        const bodyTxt = namedMatch[3].trim();
+                        if (rawName && bodyTxt && !/^(https?|note|music|sfx)$/i.test(rawName)) {
+                            const key = rawName.toLowerCase();
+                            if (!namedSpeakerMap.has(key)) {
+                                const assigned = Math.min(6, nextNamedId++);
+                                namedSpeakerMap.set(key, assigned);
+                                idToLabel.set(assigned, rawName);
                             }
+                            activeSpeaker = namedSpeakerMap.get(key);
+                            txt = bodyTxt;
+                            hadSpeakerCues = true;
+                            explicitSwitch = true;
                         }
-                    });
-
-                    child.stdout.on('data', data => {
-                        stdoutData += data.toString();
-                    });
-
-                    child.on('close', code => {
-                        if (stdoutData.trim()) {
-                            try {
-                                const result = JSON.parse(stdoutData.trim());
-                                if (result.success) {
-                                    console.log(`[Server Whisper Success]: Generated speech-to-text transcript (${result.language || 'en'})`);
-                                    res.write(JSON.stringify({
-                                        type: 'result',
-                                        success: true,
-                                        transcript: result.transcript,
-                                        language: result.language,
-                                        notice: result.notice
-                                    }) + '\n');
-                                    return res.end();
-                                } else if (result.error) {
-                                    console.error(`[Server Whisper Reported Error]: ${result.error}`);
-                                    res.write(JSON.stringify({ type: 'result', success: false, error: result.error }) + '\n');
-                                    return res.end();
-                                }
-                            } catch (e) {
-                                // Fall through to standard error handler
+                    } else if (/^>>+\s*/.test(txt) || /^-\s+/.test(txt)) {
+                        txt = txt.replace(/^(?:>>+|-)\s*/, '').trim();
+                        if (parsedTurns.length > 0 && wantSpeakers) {
+                            activeSpeaker = activeSpeaker === 1 ? 2 : 1;
+                            idToLabel.set(activeSpeaker, `Speaker ${activeSpeaker}`);
+                            hadSpeakerCues = true;
+                            explicitSwitch = true;
+                        }
+                    } else if (/\s>>+\s/.test(txt) && wantSpeakers) {
+                        // Split mid-cue YouTube >> speaker switch into two turns
+                        const splitParts = txt.split(/\s*>>+\s*/).map(p => p.trim()).filter(Boolean);
+                        splitParts.forEach((part, idx) => {
+                            if (idx > 0) {
+                                activeSpeaker = activeSpeaker === 1 ? 2 : 1;
+                                idToLabel.set(activeSpeaker, `Speaker ${activeSpeaker}`);
+                                hadSpeakerCues = true;
                             }
-                        }
+                            parsedTurns.push({
+                                startSec: cue.startSec,
+                                endSec: cue.endSec,
+                                speaker: activeSpeaker,
+                                speakerLabel: idToLabel.get(activeSpeaker) || `Speaker ${activeSpeaker}`,
+                                text: part,
+                                forceBreak: idx > 0
+                            });
+                        });
+                        continue;
+                    }
 
-                        const errMsg = (stderrData || 'Whisper transcription failed').trim();
-                        console.error(`[Server Whisper Error]: ${errMsg}`);
-                        res.write(JSON.stringify({ type: 'result', success: false, error: errMsg }) + '\n');
-                        res.end();
-                    });
-
-                    child.on('error', err => {
-                        console.error(`[Server Whisper Spawn Error]: ${err.message}`);
-                        res.write(JSON.stringify({ type: 'result', success: false, error: err.message }) + '\n');
-                        res.end();
+                    if (!txt) continue;
+                    parsedTurns.push({
+                        startSec: cue.startSec,
+                        endSec: cue.endSec,
+                        speaker: wantSpeakers ? activeSpeaker : 1,
+                        speakerLabel: wantSpeakers ? (idToLabel.get(activeSpeaker) || `Speaker ${activeSpeaker}`) : 'Speaker 1',
+                        text: txt,
+                        forceBreak: explicitSwitch
                     });
                 }
+
+                // Merge tiny rolling same-speaker fragments into readable sentence rows
+                const merged = [];
+                for (const turn of parsedTurns) {
+                    const prev = merged[merged.length - 1];
+                    const gap = prev ? (turn.startSec - prev.endSec) : 99;
+                    const combDur = prev ? (turn.endSec - prev.startSec) : 99;
+                    const combLen = prev ? (prev.text.length + 1 + turn.text.length) : 999;
+                    if (prev && !turn.forceBreak && prev.speaker === turn.speaker && gap <= 1.0 && combDur <= 7.5 && combLen <= 210) {
+                        prev.endSec = Math.max(prev.endSec, turn.endSec);
+                        prev.text = `${prev.text} ${turn.text}`.trim();
+                    } else {
+                        merged.push({ ...turn });
+                    }
+                }
+
+                const speakerStats = new Map();
+                const segments = [];
+                const cleanLines = [];
+
+                for (const m of merged) {
+                    const sStr = fmtVttSec(m.startSec);
+                    const eStr = fmtVttSec(Math.max(m.startSec, m.endSec));
+                    const dur = Math.max(0.5, m.endSec - m.startSec);
+                    const spk = m.speaker || 1;
+                    const label = m.speakerLabel || `Speaker ${spk}`;
+
+                    if (!speakerStats.has(spk)) {
+                        speakerStats.set(spk, { id: spk, label, count: 0, durationSec: 0 });
+                    }
+                    const st = speakerStats.get(spk);
+                    st.count += 1;
+                    st.durationSec += dur;
+
+                    segments.push({
+                        start: sStr,
+                        end: eStr,
+                        startSec: m.startSec,
+                        endSec: m.endSec,
+                        speaker: spk,
+                        speakerLabel: label,
+                        text: m.text
+                    });
+                    cleanLines.push(wantSpeakers ? `[${sStr} - ${eStr}] [${label}] ${m.text}` : `[${sStr} - ${eStr}] ${m.text}`);
+                }
+
+                const totalDur = Array.from(speakerStats.values()).reduce((acc, v) => acc + v.durationSec, 0) || 1;
+                const speakers = Array.from(speakerStats.values())
+                    .sort((a, b) => a.id - b.id)
+                    .map(v => ({
+                        id: v.id,
+                        label: v.label,
+                        count: v.count,
+                        durationSec: Number(v.durationSec.toFixed(1)),
+                        share: Math.round((v.durationSec / totalDur) * 100)
+                    }));
+
+                return {
+                    transcript: cleanLines.join('\n'),
+                    segments,
+                    speakers,
+                    speakerCount: speakers.length,
+                    hadSpeakerCues
+                };
+            };
+
+            const extractYouTubeCaptions = ({ fallbackToWhisper = false, fallbackNotice = null } = {}) => {
+                writeEvent({
+                    type: 'progress',
+                    percent: 15,
+                    status: 'Fetching YouTube timed captions...',
+                    speed: 'Instant Subs',
+                    eta: '~2s'
+                });
+
+                const cleanUrl = url.replace(/"/g, '\\"');
+                const subDir = path.join(DOWNLOADS_DIR, `.sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`);
+                fs.mkdirSync(subDir, { recursive: true });
+                const subOutTpl = path.join(subDir, 'sub').replace(/\\/g, '/');
+                const subLangFlag = chosenLang === 'auto' ? 'all' : 'en.*,en';
+                const cmd = `${getBaseYtdlpCmd(url)} --write-sub --write-auto-sub --sub-format vtt --sub-lang "${subLangFlag}" --skip-download -o "${subOutTpl}" "${cleanUrl}"`;
+
+                activeChild = exec(cmd, { maxBuffer: 1024 * 1024 * 15, windowsHide: true, timeout: 45000 }, (error, stdout, stderr) => {
+                    activeChild = null;
+                    let subOut = '';
+                    try {
+                        if (fs.existsSync(subDir)) {
+                            const vttFiles = fs.readdirSync(subDir).filter(f => f.toLowerCase().endsWith('.vtt')).sort((a, b) => a.length - b.length);
+                            if (vttFiles.length > 0) {
+                                subOut = fs.readFileSync(path.join(subDir, vttFiles[0]), 'utf8').trim();
+                            }
+                        }
+                    } catch (e) {
+                    } finally {
+                        try { fs.rmSync(subDir, { recursive: true, force: true }); } catch (e) {}
+                    }
+
+                    if (clientAborted || res.writableEnded) return;
+
+                    const errOut = (stderr || '').trim();
+                    const hasSubtitleCues = subOut.includes('-->') || subOut.startsWith('WEBVTT');
+
+                    if (hasSubtitleCues) {
+                        const parsed = parseYouTubeVtt(subOut);
+                        if (parsed.segments.length > 0) {
+                            if (cmd.includes('--cookies')) cookiesRejectedByYouTube = false;
+                            console.log(`[Server YouTube Captions Extracted]: ${parsed.segments.length} lines (${parsed.speakerCount} speakers, cues=${parsed.hadSpeakerCues})`);
+                            writeEvent({
+                                type: 'progress',
+                                percent: 100,
+                                status: 'Subtitles Extracted',
+                                speed: 'Instant',
+                                eta: '0s'
+                            });
+                            let notice = fallbackNotice;
+                            if (!notice && wantSpeakers && !parsed.hadSpeakerCues) {
+                                notice = 'Instant YouTube captions do not contain voice audio — switch engine to "Whisper AI + Speakers" to separate speakers by voice.';
+                            }
+                            return finishStream({
+                                type: 'result',
+                                success: true,
+                                transcript: parsed.transcript,
+                                segments: parsed.segments,
+                                speakers: parsed.speakers,
+                                speakerCount: parsed.speakerCount,
+                                platform: 'youtube',
+                                source: 'youtube-autosub',
+                                notice
+                            });
+                        }
+                    }
+
+                    if (!hasSubtitleCues && /not a bot|Sign in to confirm|cookies are no longer valid/i.test(errOut)) {
+                        if (cmd.includes('--cookies')) cookiesRejectedByYouTube = true;
+                        const lastErrLine = errOut.split(/[\r\n]+/).filter(Boolean).slice(-1)[0] || errOut.slice(0, 220);
+                        console.warn(`[Server Transcript Bot Gate]: ${lastErrLine}`);
+                        if (!fallbackToWhisper) {
+                            return finishStream({
+                                type: 'result',
+                                success: false,
+                                error: 'YouTube blocked this cloud IP ("Sign in to confirm you\'re not a bot"). Click Cookies (top right) to upload fresh YouTube cookies, then retry.'
+                            });
+                        }
+                    }
+
+                    if (fallbackToWhisper) {
+                        runWhisperTranscription({ fallbackToCaptions: false });
+                    } else {
+                        finishStream({
+                            type: 'result',
+                            success: false,
+                            error: 'No captions or audio stream could be extracted for this video.'
+                        });
+                    }
+                });
+            };
+
+            function runWhisperTranscription({ fallbackToCaptions = false } = {}) {
+                console.log(`[Server Running Local Whisper AI]: ${url} (platform=${platform}, speakers=${wantSpeakers}, lang=${chosenLang})`);
+                const pyArgs = [path.join(__dirname, 'transcribe_whisper.py'), url, '--language', chosenLang];
+                if (start) pyArgs.push('--start', start);
+                if (end) pyArgs.push('--end', end);
+                if (full) pyArgs.push('--full');
+                if (!wantSpeakers) pyArgs.push('--no-speakers');
+                if (title && String(title).trim()) pyArgs.push('--title', String(title).trim().slice(0, 140));
+
+                writeEvent({
+                    type: 'progress',
+                    percent: 5,
+                    status: 'Connecting to media stream...',
+                    speed: 'Connecting...',
+                    eta: '--'
+                });
+
+                const child = spawn(PYTHON_BIN, pyArgs, { windowsHide: true });
+                activeChild = child;
+                let stdoutData = '';
+                let stderrData = '';
+
+                child.stderr.on('data', data => {
+                    const text = data.toString();
+                    stderrData += text;
+                    const lines = text.split(/[\r\n]+/);
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed) continue;
+                        const match = trimmed.match(/\[WHISPER_PROGRESS:\s*([0-9.]+)%\s*\|\s*(.*?)\]/);
+                        if (match) {
+                            const percent = parseFloat(match[1]);
+                            const status = match[2];
+                            writeEvent({
+                                type: 'progress',
+                                percent,
+                                status,
+                                speed: percent >= 88 ? 'Speaker AI' : 'Whisper AI',
+                                eta: `${Math.max(1, Math.round(100 - percent))}% left`
+                            });
+                        }
+                    }
+                });
+
+                child.stdout.on('data', data => {
+                    stdoutData += data.toString();
+                });
+
+                child.on('close', () => {
+                    activeChild = null;
+                    if (clientAborted || res.writableEnded) return;
+
+                    if (stdoutData.trim()) {
+                        try {
+                            const result = JSON.parse(stdoutData.trim());
+                            if (result.cookiesRejected) cookiesRejectedByYouTube = true;
+                            if (result.success) {
+                                if (isYouTube && !result.cookiesRejected && getCookiesFlag(url)) {
+                                    cookiesRejectedByYouTube = false;
+                                }
+                                console.log(`[Server Whisper Success]: ${result.segments?.length || 0} turns, ${result.speakerCount || 1} speaker(s), model=${result.model || 'whisper'}, lang=${result.language || 'en'}`);
+                                return finishStream({
+                                    type: 'result',
+                                    success: true,
+                                    transcript: result.transcript,
+                                    segments: result.segments || [],
+                                    speakers: result.speakers || [],
+                                    speakerCount: result.speakerCount || 1,
+                                    language: result.language,
+                                    model: result.model,
+                                    platform: result.platform || platform,
+                                    source: 'whisper-ai',
+                                    notice: result.notice
+                                });
+                            } else if (result.error) {
+                                console.error(`[Server Whisper Reported Error]: ${result.error}`);
+                                if (fallbackToCaptions && isYouTube) {
+                                    writeEvent({
+                                        type: 'progress',
+                                        percent: 12,
+                                        status: 'Audio stream restricted — falling back to YouTube captions...',
+                                        speed: 'Fallback',
+                                        eta: '~2s'
+                                    });
+                                    return extractYouTubeCaptions({
+                                        fallbackToWhisper: false,
+                                        fallbackNotice: 'YouTube audio stream was restricted; loaded YouTube timed captions instead.'
+                                    });
+                                }
+                                return finishStream({ type: 'result', success: false, error: result.error });
+                            }
+                        } catch (e) {
+                            // Fall through to standard error handler
+                        }
+                    }
+
+                    const errMsg = (stderrData || 'Whisper transcription failed').trim();
+                    console.error(`[Server Whisper Error]: ${errMsg}`);
+                    if (fallbackToCaptions && isYouTube) {
+                        return extractYouTubeCaptions({
+                            fallbackToWhisper: false,
+                            fallbackNotice: 'Loaded YouTube timed captions (Whisper audio fallback).'
+                        });
+                    }
+                    finishStream({ type: 'result', success: false, error: errMsg });
+                });
+
+                child.on('error', err => {
+                    activeChild = null;
+                    console.error(`[Server Whisper Spawn Error]: ${err.message}`);
+                    finishStream({ type: 'result', success: false, error: err.message });
+                });
+            }
+
+            if (chosenEngine === 'captions') {
+                extractYouTubeCaptions({ fallbackToWhisper: true });
+            } else {
+                runWhisperTranscription({ fallbackToCaptions: isYouTube });
+            }
         }).catch(err => {
             if (!res.headersSent) {
                 res.writeHead(err.statusCode || 400, { 'Content-Type': 'application/json' });

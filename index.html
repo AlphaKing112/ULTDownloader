@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.9">
+    <link rel="stylesheet" href="style.css?v=4.0">
 </head>
 <body>
     <div class="app-container">
@@ -574,7 +574,7 @@
                                         <i class="fa-solid fa-brain"></i>
                                         <div class="radio-card-text">
                                             <span class="radio-card-title">AI Speech Transcript</span>
-                                            <span class="radio-card-sub">Fast Whisper AI</span>
+                                            <span class="radio-card-sub">Whisper AI · Speaker Colors</span>
                                         </div>
                                     </div>
                                 </label>
@@ -593,12 +593,37 @@
 
                         <div class="transcript-range-card" id="transcript-range-row" style="display: none;">
                             <div class="transcript-range-header">
-                                <span class="transcript-range-title"><i class="fa-solid fa-sliders"></i> Transcript Range & Engine</span>
+                                <span class="transcript-range-title">
+                                    <i class="fa-solid fa-sliders"></i> Transcript Range & AI Engine
+                                    <span class="transcript-platform-badge hidden" id="transcript-platform-badge"></span>
+                                </span>
                                 <div class="transcript-range-actions">
-                                    <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-bolt"></i> Auto (Instant Subs / 5m VOD)</span>
+                                    <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-bolt"></i> Auto (Whisper AI · 5m VOD)</span>
                                     <button type="button" class="btn-sync-range" onclick="syncTranscriptRangeFromClipper()" title="Import Start and End times from Section Clipper">
                                         <i class="fa-solid fa-arrows-rotate"></i> Sync from Clipper
                                     </button>
+                                </div>
+                            </div>
+
+                            <!-- AI Engine, Speaker Diarization & Language Controls -->
+                            <div class="transcript-ai-controls">
+                                <div class="transcript-engine-group">
+                                    <button type="button" class="transcript-engine-pill active" id="btn-engine-whisper" onclick="setTranscriptEngine('whisper')" title="Transcribes audio with Whisper AI and separates speakers by voice on YouTube, Twitch & Kick">
+                                        <i class="fa-solid fa-microphone-lines"></i> Whisper AI + Speakers
+                                    </button>
+                                    <button type="button" class="transcript-engine-pill" id="btn-engine-captions" onclick="setTranscriptEngine('captions')" title="Instant full-video YouTube timed captions (1-2s)">
+                                        <i class="fa-solid fa-closed-captioning"></i> Fast YT Captions
+                                    </button>
+                                </div>
+                                <div class="transcript-options-right">
+                                    <label class="transcript-speaker-toggle" title="Detect when different people talk and highlight each speaker in a distinct color">
+                                        <input type="checkbox" id="transcript-detect-speakers" checked>
+                                        <span>Speaker Colors</span>
+                                    </label>
+                                    <select id="transcript-lang" class="transcript-lang-select" title="Spoken language mode">
+                                        <option value="en">EN (Fast)</option>
+                                        <option value="auto">Auto (All Langs)</option>
+                                    </select>
                                 </div>
                             </div>
 
@@ -628,7 +653,7 @@
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('full')">🌐 Full Stream</button>
                                 </div>
                             </div>
-                            <span class="field-hint"><i class="fa-solid fa-circle-info"></i> <strong>Auto</strong> extracts full YouTube timestamped captions instantly (or first 5m on Whisper VODs). Click any timestamp line after extraction to jump the player there.</span>
+                            <span class="field-hint" id="transcript-engine-hint"><i class="fa-solid fa-circle-info"></i> <strong>Whisper AI + Speakers</strong> listens to voices on YouTube, Twitch &amp; Kick and highlights each speaker in a different color. Click any timestamp to jump there, or click a speaker pill to filter/rename.</span>
                         </div>
                     </div>
 
@@ -891,6 +916,7 @@
                                     <i class="fa-regular fa-copy"></i>
                                 </button>
                             </div>
+                            <div class="transcript-speakers-bar hidden" id="transcript-speakers-bar"></div>
                             <div class="transcript-search-row hidden" id="transcript-search-row">
                                 <i class="fa-solid fa-magnifying-glass text-muted" style="font-size: 11px;"></i>
                                 <input type="text" id="transcript-search-input" placeholder="Search spoken keywords (click any timestamp to jump)...">
@@ -1077,6 +1103,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=4.2"></script>
+    <script src="app.js?v=4.3"></script>
 </body>
 </html>

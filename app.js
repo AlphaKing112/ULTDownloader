@@ -318,10 +318,92 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- Live Transcript Range Duration & Presets ---
+    // --- Live Transcript Range Duration, Platform Detection & AI Engine ---
     const transcriptStartInput = document.getElementById('transcript-start');
     const transcriptEndInput = document.getElementById('transcript-end');
     const transcriptDurationBadge = document.getElementById('transcript-duration-badge');
+    const transcriptPlatformBadge = document.getElementById('transcript-platform-badge');
+    const transcriptEngineHint = document.getElementById('transcript-engine-hint');
+    const btnEngineWhisper = document.getElementById('btn-engine-whisper');
+    const btnEngineCaptions = document.getElementById('btn-engine-captions');
+    const tagsUrlField = document.getElementById('tags-url');
+    let selectedTranscriptEngine = 'whisper';
+
+    function detectTranscriptPlatform(url) {
+        const u = String(url || '').trim().toLowerCase();
+        if (!u) return null;
+        if (u.includes('youtube.com') || u.includes('youtu.be')) {
+            return { key: 'youtube', label: 'YouTube', icon: 'fa-brands fa-youtube', cls: 'plat-youtube', isYouTube: true };
+        }
+        if (u.includes('twitch.tv')) {
+            const isClip = u.includes('clips.twitch.tv/') || u.includes('/clip/');
+            return { key: isClip ? 'twitch_clip' : 'twitch_vod', label: isClip ? 'Twitch Clip' : 'Twitch VOD', icon: 'fa-brands fa-twitch', cls: 'plat-twitch', isYouTube: false };
+        }
+        if (u.includes('kick.com')) {
+            const isClip = u.includes('/clips/') || u.includes('clip=');
+            return { key: isClip ? 'kick_clip' : 'kick_vod', label: isClip ? 'Kick Clip' : 'Kick VOD', icon: 'fa-solid fa-bolt', cls: 'plat-kick', isYouTube: false };
+        }
+        return null;
+    }
+
+    function updateTranscriptPlatformUI() {
+        const url = tagsUrlField ? tagsUrlField.value.trim() : '';
+        const plat = detectTranscriptPlatform(url);
+
+        if (transcriptPlatformBadge) {
+            if (plat) {
+                transcriptPlatformBadge.className = `transcript-platform-badge ${plat.cls}`;
+                transcriptPlatformBadge.innerHTML = `<i class="${plat.icon}"></i> ${plat.label}`;
+            } else {
+                transcriptPlatformBadge.className = 'transcript-platform-badge hidden';
+                transcriptPlatformBadge.innerHTML = '';
+            }
+        }
+
+        const captionsAllowed = !plat || plat.isYouTube;
+        if (btnEngineCaptions) {
+            btnEngineCaptions.disabled = !captionsAllowed;
+            if (!captionsAllowed && selectedTranscriptEngine === 'captions') {
+                selectedTranscriptEngine = 'whisper';
+            }
+        }
+        if (btnEngineWhisper && btnEngineCaptions) {
+            btnEngineWhisper.classList.toggle('active', selectedTranscriptEngine === 'whisper');
+            btnEngineCaptions.classList.toggle('active', selectedTranscriptEngine === 'captions');
+        }
+
+        if (transcriptEngineHint) {
+            if (plat && !plat.isYouTube) {
+                transcriptEngineHint.innerHTML = `<i class="fa-solid fa-circle-info"></i> <strong>${plat.label} detected:</strong> uses optimized ${plat.label.startsWith('Twitch') ? 'Twitch Audio-Only' : 'Kick Direct'} stream + Whisper AI voice speaker colors. Click any timestamp to jump.`;
+            } else if (selectedTranscriptEngine === 'captions') {
+                transcriptEngineHint.innerHTML = `<i class="fa-solid fa-circle-info"></i> <strong>Fast YT Captions:</strong> grabs full YouTube timed captions in 1-2s and parses <code>&gt;&gt;</code> speaker turns. Switch to <strong>Whisper AI + Speakers</strong> for voice-based speaker colors.`;
+            } else {
+                transcriptEngineHint.innerHTML = `<i class="fa-solid fa-circle-info"></i> <strong>Whisper AI + Speakers</strong> listens to voices on YouTube, Twitch &amp; Kick and highlights each speaker in a different color. Click any timestamp to jump, or click a speaker pill to filter/rename.`;
+            }
+        }
+
+        updateTranscriptDurationDisplay();
+    }
+
+    window.setTranscriptEngine = function(engine) {
+        const plat = detectTranscriptPlatform(tagsUrlField?.value);
+        if (engine === 'captions' && plat && !plat.isYouTube) {
+            logToConsole(`[Info] ${plat.label} uses Whisper AI (Fast YT Captions only applies to YouTube links).`, 'info');
+            return;
+        }
+        selectedTranscriptEngine = engine === 'captions' ? 'captions' : 'whisper';
+        updateTranscriptPlatformUI();
+    };
+
+    window.rerunTranscriptWithWhisper = function() {
+        selectedTranscriptEngine = 'whisper';
+        const detectBox = document.getElementById('transcript-detect-speakers');
+        if (detectBox) detectBox.checked = true;
+        updateTranscriptPlatformUI();
+        if (btnExecuteCmd && !btnExecuteCmd.disabled) {
+            btnExecuteCmd.click();
+        }
+    };
 
     function updateTranscriptDurationDisplay() {
         if (!transcriptStartInput || !transcriptEndInput || !transcriptDurationBadge) return;
@@ -330,7 +412,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const endVal = transcriptEndInput.value.trim();
 
         if (!startVal && !endVal) {
-            transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-bolt"></i> Auto (Instant Subs / 5m VOD)';
+            const label = selectedTranscriptEngine === 'captions'
+                ? 'Auto (Instant Full YT Subs)'
+                : 'Auto (Whisper AI · 5m VOD)';
+            transcriptDurationBadge.innerHTML = `<i class="fa-solid fa-bolt"></i> ${label}`;
             transcriptDurationBadge.className = 'badge-duration valid';
             return;
         }
@@ -353,6 +438,11 @@ document.addEventListener('DOMContentLoaded', () => {
             transcriptDurationBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> End must be > Start';
             transcriptDurationBadge.className = 'badge-duration invalid';
         }
+    }
+
+    if (tagsUrlField) {
+        tagsUrlField.addEventListener('input', updateTranscriptPlatformUI);
+        tagsUrlField.addEventListener('change', updateTranscriptPlatformUI);
     }
 
     window.setTranscriptPreset = function(preset) {
@@ -1366,7 +1456,7 @@ document.addEventListener('DOMContentLoaded', () => {
             rangeRow.style.display = mode === 'transcript' ? 'flex' : 'none';
         }
         if (mode === 'transcript') {
-            updateTranscriptDurationDisplay();
+            updateTranscriptPlatformUI();
         }
     };
 
@@ -2821,11 +2911,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     const endVal = (document.getElementById('transcript-end')?.value || '').trim();
                     const isFull = endVal.toLowerCase() === 'full';
                     const hasRange = Boolean(!isFull && (startVal || endVal));
-                    const rangeMsg = isFull ? ' (Full Stream)' : (hasRange ? ` (${startVal || '00:00:00'} - ${endVal})` : ' (Auto: Instant Captions / 5m VOD)');
+                    const detectSpeakers = document.getElementById('transcript-detect-speakers')?.checked !== false;
+                    const langVal = document.getElementById('transcript-lang')?.value || 'en';
+                    const plat = detectTranscriptPlatform(tagsUrl);
+                    const engineToUse = (selectedTranscriptEngine === 'captions' && (!plat || plat.isYouTube)) ? 'captions' : 'whisper';
+                    const contextTitle = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || '';
+                    const rangeMsg = isFull ? ' (Full Stream)' : (hasRange ? ` (${startVal || '00:00:00'} - ${endVal})` : ` (${engineToUse === 'captions' ? 'Fast YT Captions' : 'Whisper AI · Auto'})`);
 
-                    logToConsole(`[AI Transcript] Extracting transcript${rangeMsg}...`, 'system');
-                    showProgressBar('Connecting & preparing audio stream...');
-                    updateProgressBar(5, 'Connecting...', 'Starting');
+                    logToConsole(`[AI Transcript] Extracting ${plat ? plat.label + ' ' : ''}transcript${rangeMsg}${detectSpeakers ? ' + Speaker Colors' : ''}...`, 'system');
+                    showProgressBar(engineToUse === 'captions' ? 'Fetching YouTube captions...' : 'Connecting & preparing speech audio...');
+                    updateProgressBar(5, engineToUse === 'captions' ? 'Instant Subs' : 'Connecting...', 'Starting');
 
                     try {
                         const response = await fetch('/api/fetch-transcript', {
@@ -2835,7 +2930,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                 url: tagsUrl,
                                 start: isFull ? '' : startVal,
                                 end: isFull ? '' : endVal,
-                                full: isFull
+                                full: isFull,
+                                engine: engineToUse,
+                                detectSpeakers,
+                                language: langVal,
+                                title: contextTitle
                             })
                         });
 
@@ -2873,21 +2972,36 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 const bodyHeaderTitle = document.getElementById('results-body-header-title');
                                                 const noticeBanner = document.getElementById('results-notice-banner');
                                                 const isYtSubs = data.source === 'youtube-autosub';
+                                                const spkCount = Number(data.speakerCount || (Array.isArray(data.speakers) ? data.speakers.length : 0));
 
                                                 if (videoBlock) videoBlock.style.display = 'none';
                                                 if (channelBlock) channelBlock.style.display = 'none';
                                                 if (metaPills) {
-                                                    metaPills.innerHTML = `<span class="meta-stat-pill"><i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'YouTube Timed Captions' : 'Whisper AI'}</span>`;
+                                                    const pills = [];
+                                                    if (plat) {
+                                                        pills.push(`<span class="meta-stat-pill"><i class="${plat.icon}"></i> ${escapeHtml(plat.label)}</span>`);
+                                                    }
+                                                    pills.push(`<span class="meta-stat-pill"><i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'YouTube Timed Captions' : `Whisper AI${data.model ? ` (${escapeHtml(data.model)})` : ''}`}</span>`);
+                                                    if (spkCount > 0) {
+                                                        pills.push(`<span class="meta-stat-pill speaker-stat-pill"><i class="fa-solid fa-users"></i> ${spkCount} Speaker${spkCount === 1 ? '' : 's'} Detected</span>`);
+                                                    }
+                                                    if (data.language) {
+                                                        pills.push(`<span class="meta-stat-pill"><i class="fa-solid fa-language"></i> ${escapeHtml(String(data.language).toUpperCase())}</span>`);
+                                                    }
+                                                    metaPills.innerHTML = pills.join('');
                                                     metaPills.classList.remove('hidden');
                                                 }
-                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = `<i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'Interactive Timestamped Captions' : 'AI Subtitles & Full Transcript'}`;
+                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = `<i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'Interactive Timestamped Captions' : 'AI Speaker-Colored Transcript'}`;
 
-                                                if (resultsTitle) resultsTitle.textContent = isYtSubs ? 'YouTube Captions & Interactive Transcript' : 'AI Speech-to-Text Transcript (Whisper AI)';
+                                                if (resultsTitle) resultsTitle.textContent = isYtSubs ? 'YouTube Captions & Interactive Transcript' : 'AI Speech Transcript (Whisper AI)';
                                                 if (resultsIcon) resultsIcon.className = `fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'} results-icon`;
 
                                                 if (noticeBanner) {
                                                     if (data.notice) {
-                                                        noticeBanner.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>${escapeHtml(data.notice)}</span>`;
+                                                        const rerunBtn = isYtSubs
+                                                            ? ` <button type="button" class="btn-rerun-whisper" onclick="rerunTranscriptWithWhisper()"><i class="fa-solid fa-microphone-lines"></i> Run Whisper AI Voices</button>`
+                                                            : '';
+                                                        noticeBanner.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>${escapeHtml(data.notice)}</span>${rerunBtn}`;
                                                         noticeBanner.classList.remove('hidden');
                                                     } else {
                                                         noticeBanner.classList.add('hidden');
@@ -2895,11 +3009,17 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 }
 
                                                 if (textBox) {
-                                                    renderInteractiveTranscript(data.transcript);
+                                                    renderInteractiveTranscript(data.transcript, {
+                                                        segments: data.segments,
+                                                        speakers: data.speakers,
+                                                        speakerCount: spkCount,
+                                                        showSpeakerColors: detectSpeakers
+                                                    });
                                                 }
                                                 if (resultsCard) resultsCard.classList.remove('hidden');
 
-                                                logToConsole(`[Success] ${isYtSubs ? 'YouTube captions' : 'Whisper transcript'} loaded (${data.transcript.split(/\r?\n/).length} lines)!`, 'success');
+                                                const turnCount = Array.isArray(data.segments) && data.segments.length ? data.segments.length : data.transcript.split(/\r?\n/).length;
+                                                logToConsole(`[Success] ${isYtSubs ? 'YouTube captions' : 'Whisper AI transcript'} loaded (${turnCount} lines${spkCount > 1 ? `, ${spkCount} speakers color-coded` : ''})!`, 'success');
                                             } else {
                                                 hideProgressBar();
                                                 logToConsole(`[Error] ${data.error || 'Could not extract transcript for this video.'}`, 'error');
@@ -3101,6 +3221,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const bodyHeaderTitle = document.getElementById('results-body-header-title');
         const noticeBanner = document.getElementById('results-notice-banner');
         const searchRow = document.getElementById('transcript-search-row');
+        const speakersBar = document.getElementById('transcript-speakers-bar');
         const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
 
         lastResultsMode = 'metadata';
@@ -3112,6 +3233,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (videoBlock) videoBlock.style.display = 'flex';
         if (channelBlock) channelBlock.style.display = 'flex';
         if (searchRow) searchRow.classList.add('hidden');
+        if (speakersBar) speakersBar.classList.add('hidden');
         if (noticeBanner) noticeBanner.classList.add('hidden');
         if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = '<i class="fa-solid fa-align-left"></i> Video Description';
 
@@ -3144,6 +3266,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    let activeSpeakerFilter = 'all';
+    let transcriptSegmentsState = [];
+    let transcriptSpeakersState = [];
+    let customSpeakerNames = {};
+
+    function getSpeakerDisplayName(spkId, fallbackLabel = '') {
+        return customSpeakerNames[spkId] || fallbackLabel || `Speaker ${spkId}`;
+    }
+
+    function rebuildRawTranscriptFromState() {
+        if (!transcriptSegmentsState.length) return;
+        rawTranscriptData = transcriptSegmentsState.map(seg => {
+            const timePart = seg.end ? `[${seg.start} - ${seg.end}]` : `[${seg.start}]`;
+            if (seg.speaker) {
+                const name = getSpeakerDisplayName(seg.speaker, seg.speakerLabel);
+                return `${timePart} [${name}] ${seg.text}`;
+            }
+            return `${timePart} ${seg.text}`;
+        }).join('\n');
+    }
+
     function filterInteractiveTranscriptRows(query) {
         const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
         const countEl = document.getElementById('transcript-search-count');
@@ -3152,16 +3295,102 @@ document.addEventListener('DOMContentLoaded', () => {
         const rows = textBox.querySelectorAll('.transcript-interactive-row, .transcript-plain-line');
         let shown = 0;
         rows.forEach(r => {
-            const match = !q || r.textContent.toLowerCase().includes(q);
+            const spkMatch = activeSpeakerFilter === 'all' || r.dataset.speaker === String(activeSpeakerFilter);
+            const textMatch = !q || r.textContent.toLowerCase().includes(q);
+            const match = spkMatch && textMatch;
             r.style.display = match ? '' : 'none';
             if (match) shown++;
         });
         if (countEl) {
-            countEl.textContent = q ? `${shown} / ${rows.length} matches` : `${rows.length} lines`;
+            const isFiltered = Boolean(q || activeSpeakerFilter !== 'all');
+            countEl.textContent = isFiltered ? `${shown} / ${rows.length} shown` : `${rows.length} lines`;
         }
     }
 
-    function renderInteractiveTranscript(rawText) {
+    function renderTranscriptSpeakersBar(speakers, totalLines) {
+        const bar = document.getElementById('transcript-speakers-bar');
+        if (!bar) return;
+
+        if (!Array.isArray(speakers) || speakers.length === 0) {
+            bar.classList.add('hidden');
+            bar.innerHTML = '';
+            return;
+        }
+
+        bar.innerHTML = '';
+
+        const allBtn = document.createElement('button');
+        allBtn.type = 'button';
+        allBtn.className = `speaker-filter-pill speaker-all-pill${activeSpeakerFilter === 'all' ? ' active' : ''}`;
+        allBtn.innerHTML = `<span>All</span><span class="speaker-share">${totalLines}</span>`;
+        allBtn.onclick = () => {
+            activeSpeakerFilter = 'all';
+            renderTranscriptSpeakersBar(transcriptSpeakersState, transcriptSegmentsState.length);
+            filterInteractiveTranscriptRows(document.getElementById('transcript-search-input')?.value || '');
+        };
+        bar.appendChild(allBtn);
+
+        speakers.forEach(spk => {
+            const spkId = Number(spk.id) || 1;
+            const colorIdx = ((spkId - 1) % 6) + 1;
+            const displayName = getSpeakerDisplayName(spkId, spk.label);
+
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = `speaker-filter-pill speaker-color-${colorIdx}${String(activeSpeakerFilter) === String(spkId) ? ' active' : ''}`;
+            pill.title = `Click to filter by ${displayName} · Double-click or click pencil to rename`;
+
+            const dot = document.createElement('span');
+            dot.className = 'speaker-dot';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'speaker-pill-name';
+            nameSpan.textContent = displayName;
+
+            const shareSpan = document.createElement('span');
+            shareSpan.className = 'speaker-share';
+            shareSpan.textContent = typeof spk.share === 'number' ? `${spk.share}%` : `${spk.count || ''}`;
+
+            const renameBtn = document.createElement('span');
+            renameBtn.className = 'speaker-rename-btn';
+            renameBtn.title = `Rename ${displayName}`;
+            renameBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
+
+            const handleRename = (ev) => {
+                if (ev) ev.stopPropagation();
+                const current = getSpeakerDisplayName(spkId, spk.label);
+                const nextName = window.prompt(`Rename ${current} (updates transcript, copy & .txt export):`, current);
+                if (nextName && nextName.trim()) {
+                    const cleaned = nextName.trim().slice(0, 32);
+                    customSpeakerNames[spkId] = cleaned;
+                    document.querySelectorAll(`[data-speaker-badge="${spkId}"] .speaker-name-text`).forEach(el => {
+                        el.textContent = cleaned;
+                    });
+                    rebuildRawTranscriptFromState();
+                    renderTranscriptSpeakersBar(transcriptSpeakersState, transcriptSegmentsState.length);
+                    logToConsole(`[Speakers] Renamed Speaker ${spkId} → "${cleaned}"`, 'info');
+                }
+            };
+
+            renameBtn.onclick = handleRename;
+            pill.ondblclick = handleRename;
+            pill.onclick = () => {
+                activeSpeakerFilter = (String(activeSpeakerFilter) === String(spkId)) ? 'all' : String(spkId);
+                renderTranscriptSpeakersBar(transcriptSpeakersState, transcriptSegmentsState.length);
+                filterInteractiveTranscriptRows(document.getElementById('transcript-search-input')?.value || '');
+            };
+
+            pill.appendChild(dot);
+            pill.appendChild(nameSpan);
+            pill.appendChild(shareSpan);
+            pill.appendChild(renameBtn);
+            bar.appendChild(pill);
+        });
+
+        bar.classList.remove('hidden');
+    }
+
+    function renderInteractiveTranscript(rawText, opts = {}) {
         const textBox = document.getElementById('results-text-box') || descriptionBoxContainer;
         if (!textBox) return;
 
@@ -3169,56 +3398,133 @@ document.addEventListener('DOMContentLoaded', () => {
         const tagsTitle = document.getElementById('results-card-title')?.textContent || 'transcript';
         lastResultsTitle = document.getElementById('thumb-title')?.value.trim() || document.getElementById('section-title')?.value.trim() || tagsTitle;
         rawTranscriptData = rawText || '';
+        activeSpeakerFilter = 'all';
+        customSpeakerNames = {};
         textBox.innerHTML = '';
         textBox.classList.add('transcript-interactive-container');
 
-        const lines = (rawText || '').split(/[\r\n]+/);
+        const showSpeakerColors = opts.showSpeakerColors !== false;
+        let parsedSegments = [];
+
+        if (Array.isArray(opts.segments) && opts.segments.length > 0) {
+            parsedSegments = opts.segments.map(s => ({
+                start: s.start || '00:00',
+                end: s.end || '',
+                startSec: typeof s.startSec === 'number' ? s.startSec : parseTimestampToSeconds(s.start || '00:00'),
+                speaker: showSpeakerColors ? (Number(s.speaker) || 1) : 0,
+                speakerLabel: s.speakerLabel || `Speaker ${Number(s.speaker) || 1}`,
+                text: s.text || ''
+            }));
+        } else {
+            const lines = (rawText || '').split(/[\r\n]+/);
+            const speakerLabelToId = new Map();
+            let nextSpkId = 1;
+            lines.forEach(line => {
+                const trimmed = line.trim();
+                if (!trimmed) return;
+                const match = trimmed.match(/^\[([0-9:]+)(?:\s*-\s*([0-9:]+))?\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                if (match) {
+                    const startStr = match[1];
+                    const endStr = match[2] || '';
+                    const spkRaw = (match[3] || '').trim();
+                    const text = match[4] || '';
+                    let spkId = 0;
+                    let spkLabel = '';
+                    if (showSpeakerColors && spkRaw) {
+                        const numMatch = spkRaw.match(/^Speaker\s+(\d+)$/i);
+                        if (numMatch) {
+                            spkId = parseInt(numMatch[1], 10) || 1;
+                            spkLabel = `Speaker ${spkId}`;
+                        } else {
+                            const key = spkRaw.toLowerCase();
+                            if (!speakerLabelToId.has(key)) speakerLabelToId.set(key, nextSpkId++);
+                            spkId = speakerLabelToId.get(key);
+                            spkLabel = spkRaw;
+                        }
+                    }
+                    parsedSegments.push({
+                        start: startStr,
+                        end: endStr,
+                        startSec: parseTimestampToSeconds(startStr),
+                        speaker: spkId,
+                        speakerLabel: spkLabel,
+                        text
+                    });
+                } else {
+                    parsedSegments.push({ plain: trimmed });
+                }
+            });
+        }
+
+        // Build speaker stats if not already provided
+        let speakersList = Array.isArray(opts.speakers) ? opts.speakers : [];
+        if (showSpeakerColors && speakersList.length === 0) {
+            const counts = new Map();
+            parsedSegments.forEach(s => {
+                if (s.speaker) {
+                    if (!counts.has(s.speaker)) counts.set(s.speaker, { id: s.speaker, label: s.speakerLabel || `Speaker ${s.speaker}`, count: 0 });
+                    counts.get(s.speaker).count += 1;
+                }
+            });
+            const totalSpkLines = Array.from(counts.values()).reduce((acc, v) => acc + v.count, 0) || 1;
+            speakersList = Array.from(counts.values())
+                .sort((a, b) => a.id - b.id)
+                .map(v => ({ ...v, share: Math.round((v.count / totalSpkLines) * 100) }));
+        }
+
+        transcriptSegmentsState = parsedSegments.filter(s => !s.plain);
+        transcriptSpeakersState = showSpeakerColors ? speakersList : [];
+
         let hasTimestamps = false;
         const fragment = document.createDocumentFragment();
 
-        lines.forEach(line => {
-            const trimmed = line.trim();
-            if (!trimmed) return;
-
-            // Match [HH:MM:SS - HH:MM:SS] or [MM:SS - MM:SS] dialogue
-            const match = trimmed.match(/^\[([0-9:]+)(?:\s*-\s*([0-9:]+))?\]\s*(.*)$/);
-
-            if (match) {
-                hasTimestamps = true;
-                const startStr = match[1];
-                const endStr = match[2] || '';
-                const text = match[3];
-                const startSec = parseTimestampToSeconds(startStr);
-
-                const row = document.createElement('div');
-                row.className = 'transcript-interactive-row';
-
-                const timeBtn = document.createElement('button');
-                timeBtn.type = 'button';
-                timeBtn.className = 'transcript-time-chip';
-                timeBtn.title = `Jump player to ${startStr}`;
-                timeBtn.innerHTML = `<i class="fa-solid fa-play"></i> <span>${escapeHtml(startStr)}${endStr ? ' - ' + escapeHtml(endStr) : ''}</span>`;
-                timeBtn.onclick = () => jumpToPlayerTimestamp(startSec, startStr, row);
-
-                const textSpan = document.createElement('span');
-                textSpan.className = 'transcript-text-content';
-                textSpan.textContent = text;
-
-                row.appendChild(timeBtn);
-                row.appendChild(textSpan);
-                fragment.appendChild(row);
-            } else {
+        parsedSegments.forEach(item => {
+            if (item.plain) {
                 const plainRow = document.createElement('div');
                 plainRow.className = 'transcript-plain-line';
-                plainRow.textContent = trimmed;
+                plainRow.textContent = item.plain;
                 fragment.appendChild(plainRow);
+                return;
             }
+
+            hasTimestamps = true;
+            const spkId = showSpeakerColors ? (Number(item.speaker) || 0) : 0;
+            const colorIdx = spkId > 0 ? (((spkId - 1) % 6) + 1) : 0;
+
+            const row = document.createElement('div');
+            row.className = colorIdx > 0 ? `transcript-interactive-row speaker-${colorIdx}` : 'transcript-interactive-row';
+            if (spkId > 0) row.dataset.speaker = String(spkId);
+
+            const timeBtn = document.createElement('button');
+            timeBtn.type = 'button';
+            timeBtn.className = 'transcript-time-chip';
+            timeBtn.title = `Jump player to ${item.start}`;
+            timeBtn.innerHTML = `<i class="fa-solid fa-play"></i> <span>${escapeHtml(item.start)}${item.end ? ' - ' + escapeHtml(item.end) : ''}</span>`;
+            timeBtn.onclick = () => jumpToPlayerTimestamp(item.startSec, item.start, row);
+            row.appendChild(timeBtn);
+
+            if (spkId > 0) {
+                const spkBadge = document.createElement('span');
+                spkBadge.className = `transcript-speaker-badge speaker-badge-${colorIdx}`;
+                spkBadge.setAttribute('data-speaker-badge', String(spkId));
+                spkBadge.innerHTML = `<span class="speaker-dot"></span><span class="speaker-name-text">${escapeHtml(getSpeakerDisplayName(spkId, item.speakerLabel))}</span>`;
+                row.appendChild(spkBadge);
+            }
+
+            const textSpan = document.createElement('span');
+            textSpan.className = 'transcript-text-content';
+            textSpan.textContent = item.text;
+            row.appendChild(textSpan);
+
+            fragment.appendChild(row);
         });
 
         textBox.appendChild(fragment);
         if (!hasTimestamps) {
             textBox.classList.remove('transcript-interactive-container');
         }
+
+        renderTranscriptSpeakersBar(transcriptSpeakersState, transcriptSegmentsState.length);
 
         const searchRow = document.getElementById('transcript-search-row');
         const searchInput = document.getElementById('transcript-search-input');
