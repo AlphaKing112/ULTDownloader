@@ -66,7 +66,7 @@ def detect_platform(source):
 
 
 def fetch_kick_direct_stream(source):
-    """Fallback for Kick clips/VODs using curl_cffi Chrome impersonation when yt-dlp fails."""
+    """Resolve Kick clips/VODs via Kick JSON API or Kick VOD webpage og:video (.m3u8) using curl_cffi."""
     try:
         from curl_cffi import requests as cf_requests
     except ImportError:
@@ -88,24 +88,40 @@ def fetch_kick_direct_stream(source):
                 if isinstance(clip_obj, dict):
                     return clip_obj.get("clip_url") or clip_obj.get("video_url")
         except Exception:
-            return None
+            pass
 
-    vod_m = re.search(r"(?:kick\.com/video/|kick\.com/[^/]+/videos/|[?&]video=)([0-9a-f-]{12,})", source, re.I)
+    vod_m = re.search(r"(?:kick\.com/video/|kick\.com/[^/]+/videos?/|kick\.com/videos/|[?&]video=)([0-9a-f-]{12,})", source, re.I)
     if vod_m:
         uuid = vod_m.group(1)
         try:
             r = cf_requests.get(
                 f"https://kick.com/api/v1/video/{uuid}",
                 impersonate="chrome",
-                timeout=20,
+                timeout=15,
                 headers={"Accept": "application/json"}
             )
             if r.status_code == 200:
                 data = r.json()
-                if isinstance(data, dict):
+                if isinstance(data, dict) and data.get("source"):
                     return data.get("source")
         except Exception:
-            return None
+            pass
+
+        # Newer Kick UUIDv7 VODs return 404 on api/v1/video/ but embed og:video master.m3u8 directly in the VOD page HTML
+        try:
+            r_page = cf_requests.get(source, impersonate="chrome", timeout=20)
+            if r_page.status_code == 200 and r_page.text:
+                html = r_page.text.replace("\\/", "/").replace("\\u0026", "&")
+                og_m = re.search(r'<meta[^>]+property=["\']og:video["\'][^>]+content=["\'](https://[^"\']+\.m3u8[^"\']*)["\']', html, re.I)
+                if not og_m:
+                    og_m = re.search(r'content=["\'](https://[^"\']+\.m3u8[^"\']*)["\'][^>]+property=["\']og:video["\']', html, re.I)
+                if og_m:
+                    return og_m.group(1)
+                hls_m = re.search(r'https://stream\.kick\.com/[^\s"\'<>\\]+\.m3u8[^\s"\'<>\\]*', html, re.I)
+                if hls_m:
+                    return hls_m.group(0)
+        except Exception:
+            pass
     return None
 
 
@@ -207,6 +223,37 @@ def download_audio_to_wav(source, platform, start_time, end_time, is_full, temp_
     }.get(platform, "Media")
 
     emit_progress(5.0, f"Connecting to {platform_label} audio stream...")
+
+    def download_kick_direct_via_ffmpeg():
+        nonlocal last_err_line
+        direct_url = fetch_kick_direct_stream(source)
+        if not direct_url:
+            return None
+        emit_progress(10.0, "Streaming Kick audio directly via FFmpeg...")
+        ff_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+        if has_range and start_sec > 0:
+            ff_cmd.extend(["-ss", f"{start_sec:.3f}"])
+        ff_cmd.extend(["-i", direct_url])
+        if has_range and end_sec > start_sec:
+            ff_cmd.extend(["-t", f"{(end_sec - start_sec):.3f}"])
+        ff_cmd.extend([
+            "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
+            "-af", "highpass=f=80,lowpass=f=7600,dynaudnorm=f=200:g=15:p=0.9:m=6",
+            wav_path
+        ])
+        res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
+        if res.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1024:
+            return wav_path
+        if res.stderr:
+            last_err_line = res.stderr.strip().splitlines()[-1]
+        return None
+
+    # For Kick VODs, direct HLS resolution + FFmpeg fast seeking handles both legacy and new UUIDv7 VODs instantly
+    if platform == "kick_vod":
+        direct_wav = download_kick_direct_via_ffmpeg()
+        if direct_wav:
+            return direct_wav, start_sec, cookies_rejected, None
+
     raw_audio_file = run_ytdlp(use_cookies=True)
 
     # Automatic YouTube cookieless retry if cookies were rejected/expired
@@ -214,27 +261,12 @@ def download_audio_to_wav(source, platform, start_time, end_time, is_full, temp_
         emit_progress(7.0, "YouTube cookies rejected; retrying with cookieless client...")
         raw_audio_file = run_ytdlp(use_cookies=False)
 
-    # Kick direct API fallback via curl_cffi + FFmpeg if yt-dlp failed on Kick
+    # Kick direct API/webpage fallback via curl_cffi + FFmpeg if yt-dlp failed on Kick
     if not raw_audio_file and platform.startswith("kick"):
-        emit_progress(9.0, "Using direct Kick API stream extractor...")
-        direct_url = fetch_kick_direct_stream(source)
-        if direct_url:
-            ff_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
-            if has_range and start_sec > 0:
-                ff_cmd.extend(["-ss", f"{start_sec:.3f}"])
-            ff_cmd.extend(["-i", direct_url])
-            if has_range and end_sec > start_sec:
-                ff_cmd.extend(["-t", f"{(end_sec - start_sec):.3f}"])
-            ff_cmd.extend([
-                "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
-                "-af", "highpass=f=80,lowpass=f=7600,dynaudnorm=f=200:g=15:p=0.9:m=6",
-                wav_path
-            ])
-            res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
-            if res.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1024:
-                return wav_path, start_sec, cookies_rejected, None
-            if res.stderr:
-                last_err_line = res.stderr.strip().splitlines()[-1]
+        emit_progress(9.0, "Using direct Kick stream extractor...")
+        direct_wav = download_kick_direct_via_ffmpeg()
+        if direct_wav:
+            return direct_wav, start_sec, cookies_rejected, None
 
     if not raw_audio_file:
         detail = last_err_line or f"Could not download {platform_label} audio stream"

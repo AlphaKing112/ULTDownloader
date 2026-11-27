@@ -1907,7 +1907,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } else if ((targetMode === 'kick' || targetMode === 'auto') && isKick) {
             const clipMatch = url.match(/(?:kick\.com\/[^\/]+\/clips\/|kick\.com\/clips\/|[?&]clip=)([A-Za-z0-9_-]+)/i);
-            const vodMatch = url.match(/kick\.com\/[^\/]+\/videos\/([A-Za-z0-9_-]+)|kick\.com\/videos\/([A-Za-z0-9_-]+)/i);
+            const vodMatch = url.match(/kick\.com\/[^\/]+\/videos?\/([A-Za-z0-9_-]+)|kick\.com\/videos?\/([A-Za-z0-9_-]+)|[?&]video=([A-Za-z0-9_-]+)/i);
             const channelMatch = url.match(/kick\.com\/([A-Za-z0-9_.-]+)/i);
 
             let channelSlug = '';
@@ -1915,7 +1915,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 channelSlug = channelMatch[1];
             }
 
-            const kickVodId = vodMatch ? (vodMatch[1] || vodMatch[2]) : '';
+            const kickVodId = vodMatch ? (vodMatch[1] || vodMatch[2] || vodMatch[3]) : '';
             const kickClipId = clipMatch ? clipMatch[1] : '';
             const mediaId = kickVodId ? `kick_vod_${kickVodId}` : (kickClipId ? `kick_clip_${kickClipId}` : (channelSlug ? `kick_live_${channelSlug}` : 'kick_media'));
 
@@ -1932,28 +1932,40 @@ document.addEventListener('DOMContentLoaded', () => {
             if (playerIcon) playerIcon.className = 'fa-solid fa-bolt player-icon kick';
 
             if (kickVodId || kickClipId) {
-                if (playerTitle) playerTitle.textContent = kickVodId ? `Kick VOD Player (${kickVodId.slice(0, 8)}...)` : `Kick Clip Player (${kickClipId})`;
+                if (playerTitle) playerTitle.textContent = kickVodId ? `Kick VOD Player (${channelSlug ? '@' + channelSlug : kickVodId.slice(0, 8) + '...'})` : `Kick Clip Player (${kickClipId})`;
+                if (playerContainer) {
+                    playerContainer.innerHTML = `<div style="height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#0a0b12;border-radius:12px;color:#94a3b8;font-size:13px;"><i class="fa-solid fa-spinner fa-spin" style="font-size:22px;color:#53fc18;"></i><span>Loading Kick ${kickVodId ? 'VOD' : 'Clip'} stream...</span></div>`;
+                }
                 const apiUrl = kickVodId
-                    ? `/api/clip-preview?platform=kick&vodId=${encodeURIComponent(kickVodId)}`
-                    : `/api/clip-preview?platform=kick&slug=${encodeURIComponent(kickClipId)}`;
+                    ? `/api/clip-preview?platform=kick&vodId=${encodeURIComponent(kickVodId)}&url=${encodeURIComponent(url)}${channelSlug ? `&channel=${encodeURIComponent(channelSlug)}` : ''}`
+                    : `/api/clip-preview?platform=kick&slug=${encodeURIComponent(kickClipId)}&url=${encodeURIComponent(url)}`;
                 try {
                     const r = await fetch(apiUrl);
                     const data = await r.json();
                     if (data && data.success && data.previewUrl) {
+                        if (playerTitle && data.title) {
+                            playerTitle.textContent = `Kick ${kickVodId ? 'VOD' : 'Clip'} · ${data.title.slice(0, 48)}${data.title.length > 48 ? '…' : ''}`;
+                        }
                         mountDirectHtml5Video(data.previewUrl);
                         logToConsole(`[Player] Kick ${kickVodId ? 'VOD' : 'Clip'} loaded with live timestamp controls!`, 'info');
                         return;
                     }
                 } catch (e) {}
+
+                // Never load player.kick.com/<vodId> (Kick rejects VOD UUIDs with "This embed seems to be misconfigured")
+                if (playerContainer) {
+                    playerContainer.innerHTML = `<div style="height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center;background:#0a0b12;border:1px solid rgba(83,252,24,0.2);border-radius:12px;color:#cbd5e1;"><i class="fa-solid fa-bolt" style="font-size:26px;color:#53fc18;"></i><div style="font-weight:600;">Kick ${kickVodId ? 'VOD' : 'Clip'} preview stream unavailable</div><div style="font-size:12px;color:#94a3b8;max-width:380px;">Kick did not return a playable preview stream for this link (it may be expired, sub-only, or still processing). You can still run Download or AI Transcript directly.</div><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="margin-top:4px;text-decoration:none;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open on Kick</a></div>`;
+                }
+                logToConsole(`[Player] Kick ${kickVodId ? 'VOD' : 'Clip'} preview stream unavailable for: ${url}`, 'system');
+                return;
             }
 
             if (playerTitle) {
-                playerTitle.textContent = channelSlug ? `Kick Player (@${channelSlug})` : 'Kick Media Player';
+                playerTitle.textContent = channelSlug ? `Kick Live Player (@${channelSlug})` : 'Kick Media Player';
             }
 
-            if (playerContainer) {
-                const targetSlug = kickClipId || kickVodId || channelSlug || '';
-                playerContainer.innerHTML = `<iframe src="https://player.kick.com/${encodeURIComponent(targetSlug)}?autoplay=false&muted=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+            if (playerContainer && channelSlug) {
+                playerContainer.innerHTML = `<iframe src="https://player.kick.com/${encodeURIComponent(channelSlug)}?autoplay=false&muted=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
             }
             logToConsole(`[Player] Kick player loaded for: ${url}`, 'info');
         }

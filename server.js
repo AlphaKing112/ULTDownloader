@@ -212,6 +212,40 @@ function fetchKickJson(apiUrl) {
     });
 }
 
+// Kick's newer UUIDv7 VODs return 404 on /api/v1/video/, but the VOD webpage embeds og:video (.m3u8), og:title, and og:image
+const KICK_PAGE_META_PY = [
+    'import sys, json, re, html as html_mod',
+    'from curl_cffi import requests',
+    'r = requests.get(sys.argv[1], impersonate="chrome", timeout=20)',
+    'txt = (r.text or "").replace("\\\\/", "/").replace("\\\\u0026", "&")',
+    'def og(prop):',
+    '    m = re.search(rf\'<meta[^>]+property=["\\\']{prop}["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']\', txt, re.I)',
+    '    if not m: m = re.search(rf\'content=["\\\']([^"\\\']+)["\\\'][^>]+property=["\\\']{prop}["\\\']\', txt, re.I)',
+    '    return html_mod.unescape(m.group(1)).strip() if m else ""',
+    'video = og("og:video")',
+    'if not video:',
+    '    hm = re.search(r"https://stream\\.kick\\.com/[^\\s\\\"\\\'<>\\\\]+\\.m3u8[^\\s\\\"\\\'<>\\\\]*", txt, re.I)',
+    '    video = hm.group(0) if hm else ""',
+    'title = re.sub(r"\\s*-\\s*[^-]+\\s+VOD on KICK\\s*$", "", og("og:title"), flags=re.I).strip()',
+    'thumb = og("og:image")',
+    'sys.stdout.write(json.dumps({"status": r.status_code, "previewUrl": video, "title": title, "thumbnail": thumb}))'
+].join('\n');
+
+function fetchKickPageMeta(pageUrl) {
+    return new Promise((resolve, reject) => {
+        execFile(PYTHON_BIN, ['-c', KICK_PAGE_META_PY, pageUrl], { maxBuffer: 1024 * 1024 * 10, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
+            if (error && !stdout) return reject(new Error((stderr || error.message || 'Kick page fetch failed').trim().split('\n').pop()));
+            try {
+                const parsed = JSON.parse(stdout);
+                if (parsed.status !== 200) return reject(new Error(`Kick page responded with HTTP ${parsed.status}`));
+                resolve(parsed);
+            } catch (e) {
+                reject(new Error('Could not parse Kick page metadata'));
+            }
+        });
+    });
+}
+
 async function fetchKickChannelVideos(username, type, range = 'all', cursor = null) {
     const slug = username.toLowerCase().replace(/_/g, '-');
     if (type === 'clips' || type === 'highlights') {
@@ -1167,14 +1201,45 @@ const server = http.createServer((req, res) => {
         }
 
         if (platform === 'kick') {
+            const rawUrl = (parsedUrl.searchParams.get('url') || '').trim();
+            const channelParam = (parsedUrl.searchParams.get('channel') || '').trim();
             (async () => {
                 try {
+                    const cacheKey = `kick:${vodId || slug}`;
+                    const cached = clipPreviewCache.get(cacheKey);
+                    if (cached && cached.expires > Date.now() && cached.payload) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        return res.end(JSON.stringify(cached.payload));
+                    }
+
                     if (vodId) {
-                        const data = await fetchKickJson(`https://kick.com/api/v1/video/${encodeURIComponent(vodId)}`);
-                        const previewUrl = data?.source || data?.livestream?.source || '';
-                        if (previewUrl) {
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            return res.end(JSON.stringify({ success: true, platform, vodId, previewUrl, title: data?.livestream?.session_title || data?.session_title || '' }));
+                        // 1. Try Kick legacy v1 JSON API
+                        try {
+                            const data = await fetchKickJson(`https://kick.com/api/v1/video/${encodeURIComponent(vodId)}`);
+                            const previewUrl = data?.source || data?.livestream?.source || '';
+                            if (previewUrl) {
+                                const payload = { success: true, platform, vodId, previewUrl, title: data?.livestream?.session_title || data?.session_title || '' };
+                                setBoundedCache(clipPreviewCache, cacheKey, { payload, expires: Date.now() + 10 * 60 * 1000 }, 80);
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                return res.end(JSON.stringify(payload));
+                            }
+                        } catch (e) {}
+
+                        // 2. Fallback to Kick VOD webpage og:video (.m3u8) for newer UUIDv7 VODs
+                        const candidatePages = [];
+                        if (rawUrl && /^https?:\/\/(?:www\.)?kick\.com\//i.test(rawUrl)) candidatePages.push(rawUrl);
+                        if (channelParam) candidatePages.push(`https://kick.com/${encodeURIComponent(channelParam)}/videos/${encodeURIComponent(vodId)}`);
+                        candidatePages.push(`https://kick.com/video/${encodeURIComponent(vodId)}`);
+                        for (const pageUrl of [...new Set(candidatePages)]) {
+                            try {
+                                const meta = await fetchKickPageMeta(pageUrl);
+                                if (meta && meta.previewUrl) {
+                                    const payload = { success: true, platform, vodId, previewUrl: meta.previewUrl, title: meta.title || '', thumbnail: meta.thumbnail || '' };
+                                    setBoundedCache(clipPreviewCache, cacheKey, { payload, expires: Date.now() + 10 * 60 * 1000 }, 80);
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    return res.end(JSON.stringify(payload));
+                                }
+                            } catch (e) {}
                         }
                     }
                     if (slug) {
@@ -1182,8 +1247,10 @@ const server = http.createServer((req, res) => {
                         const clipObj = data?.clip || data;
                         const previewUrl = clipObj?.clip_url || clipObj?.video_url || '';
                         if (previewUrl) {
+                            const payload = { success: true, platform, slug, previewUrl, title: clipObj?.title || '' };
+                            setBoundedCache(clipPreviewCache, cacheKey, { payload, expires: Date.now() + 10 * 60 * 1000 }, 80);
                             res.writeHead(200, { 'Content-Type': 'application/json' });
-                            return res.end(JSON.stringify({ success: true, platform, slug, previewUrl, title: clipObj?.title || '' }));
+                            return res.end(JSON.stringify(payload));
                         }
                     }
                     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1408,6 +1475,36 @@ const server = http.createServer((req, res) => {
                                 eta: '--'
                             }) + '\n');
                             return runExecAttempt(cookielessCmd, { allowCookieRetry: false });
+                        }
+
+                        // Auto-retry Kick UUIDv7 VODs via webpage og:video .m3u8 when yt-dlp's legacy Kick v1 API returns 404
+                        const kickVodUrlMatch = isKick && cmdToRun.match(/https?:\/\/(?:www\.)?kick\.com\/[^\s"']+\/videos?\/[A-Za-z0-9_-]+/i);
+                        if (code !== 0 && allowCookieRetry && kickVodUrlMatch) {
+                            const kickPageUrl = kickVodUrlMatch[0];
+                            res.write(JSON.stringify({
+                                text: '[Kick VOD Resolver] Resolving direct Kick HLS stream from VOD page...',
+                                type: 'system',
+                                percent: 2,
+                                speed: 'Resolving...',
+                                eta: '--'
+                            }) + '\n');
+                            return fetchKickPageMeta(kickPageUrl).then(meta => {
+                                if (clientAborted || res.writableEnded) return cleanupJobDir();
+                                if (meta && meta.previewUrl) {
+                                    cleanupJobDir();
+                                    if (jobDir && !fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
+                                    const directCmd = cmdToRun.replace(kickPageUrl, meta.previewUrl);
+                                    res.write(JSON.stringify({
+                                        text: '[Kick VOD Resolver] Direct HLS stream found — starting download!',
+                                        type: 'info',
+                                        percent: 5,
+                                        speed: 'Connecting...',
+                                        eta: '--'
+                                    }) + '\n');
+                                    return runExecAttempt(directCmd, { allowCookieRetry: false });
+                                }
+                                finishResponse(code);
+                            }).catch(() => finishResponse(code));
                         }
 
                         const scanDirRecursive = (dir, minMtimeMs = 0) => {
@@ -1873,7 +1970,7 @@ const server = http.createServer((req, res) => {
                     }
                 }
 
-                // 3. Kick: Direct public JSON API without python
+                // 3. Kick: Direct JSON API & VOD webpage og:image resolver
                 if (isKick) {
                     const clipMatch = url.match(/(?:kick\.com\/[^\/]+\/clips\/|kick\.com\/clips\/|[?&]clip=)([A-Za-z0-9_-]+)/i);
                     if (clipMatch && clipMatch[1]) {
@@ -1889,6 +1986,24 @@ const server = http.createServer((req, res) => {
                                     title: clipData?.title || 'kick_clip',
                                     timestamp: timestamp || '00:00:00',
                                     filename: `kick_clip_${clipMatch[1]}_thumb.jpg`
+                                }));
+                            }
+                        } catch (e) {}
+                    }
+                    const vodMatch = url.match(/kick\.com\/[^\/]+\/videos?\/([A-Za-z0-9_-]+)|kick\.com\/videos?\/([A-Za-z0-9_-]+)/i);
+                    if (vodMatch && (vodMatch[1] || vodMatch[2])) {
+                        const vodId = vodMatch[1] || vodMatch[2];
+                        try {
+                            const meta = await fetchKickPageMeta(url);
+                            if (meta && meta.thumbnail) {
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                return res.end(JSON.stringify({
+                                    success: true,
+                                    platform: 'kick',
+                                    thumbnailUrl: meta.thumbnail,
+                                    title: meta.title || `kick_vod_${vodId.slice(0, 8)}`,
+                                    timestamp: timestamp || '00:00:00',
+                                    filename: `kick_vod_${vodId.slice(0, 8)}_thumb.jpg`
                                 }));
                             }
                         } catch (e) {}
@@ -2400,7 +2515,7 @@ const server = http.createServer((req, res) => {
                                     transcript: result.transcript,
                                     segments: result.segments || [],
                                     speakers: result.speakers || [],
-                                    speakerCount: result.speakerCount || 1,
+                                    speakerCount: typeof result.speakerCount === 'number' ? result.speakerCount : 0,
                                     language: result.language,
                                     model: result.model,
                                     platform: result.platform || platform,
@@ -2502,6 +2617,20 @@ const server = http.createServer((req, res) => {
                     exec(cmd, { maxBuffer: 1024 * 1024 * 5, windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => {
                         if (error || !stdout || !stdout.trim()) {
                             const errDetail = (stderr || error?.message || 'No title returned').trim();
+                            if (url.toLowerCase().includes('kick.com') && /\/videos?\//i.test(url)) {
+                                return fetchKickPageMeta(url).then(meta => {
+                                    if (meta && meta.title) {
+                                        console.log(`[Server Kick VOD Title Fetched via Page]: "${meta.title}"`);
+                                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                                        return res.end(JSON.stringify({ success: true, title: meta.title }));
+                                    }
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    res.end(JSON.stringify({ success: false, error: errDetail }));
+                                }).catch(() => {
+                                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                                    res.end(JSON.stringify({ success: false, error: errDetail }));
+                                });
+                            }
                             console.error(`[Server Fetch Title Error]: ${errDetail}`);
                             res.writeHead(200, { 'Content-Type': 'application/json' });
                             return res.end(JSON.stringify({ success: false, error: errDetail }));
