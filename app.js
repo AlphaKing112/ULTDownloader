@@ -3123,6 +3123,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                                 const bodyHeaderTitle = document.getElementById('results-body-header-title');
                                                 const noticeBanner = document.getElementById('results-notice-banner');
                                                 const isYtSubs = data.source === 'youtube-autosub';
+                                                const isGroq = data.source === 'groq-whisper';
                                                 const spkCount = Number(data.speakerCount || (Array.isArray(data.speakers) ? data.speakers.length : 0));
 
                                                 if (videoBlock) videoBlock.style.display = 'none';
@@ -3132,7 +3133,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                                     if (plat) {
                                                         pills.push(`<span class="meta-stat-pill"><i class="${plat.icon}"></i> ${escapeHtml(plat.label)}</span>`);
                                                     }
-                                                    pills.push(`<span class="meta-stat-pill"><i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'YouTube Timed Captions' : `Whisper AI${data.model ? ` (${escapeHtml(data.model)})` : ''}`}</span>`);
+                                                    const engineLabel = isYtSubs
+                                                        ? 'YouTube Timed Captions'
+                                                        : (isGroq ? 'Groq Turbo (large-v3-turbo)' : `Whisper AI${data.model ? ` (${escapeHtml(data.model)})` : ''}`);
+                                                    const engineIcon = isYtSubs ? 'fa-closed-captioning' : (isGroq ? 'fa-bolt' : 'fa-brain');
+                                                    pills.push(`<span class="meta-stat-pill"><i class="fa-solid ${engineIcon}"></i> ${engineLabel}</span>`);
                                                     if (spkCount > 0) {
                                                         pills.push(`<span class="meta-stat-pill speaker-stat-pill"><i class="fa-solid fa-users"></i> ${spkCount} Speaker${spkCount === 1 ? '' : 's'} Detected</span>`);
                                                     }
@@ -3142,10 +3147,10 @@ document.addEventListener('DOMContentLoaded', () => {
                                                     metaPills.innerHTML = pills.join('');
                                                     metaPills.classList.remove('hidden');
                                                 }
-                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = `<i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'}"></i> ${isYtSubs ? 'Interactive Timestamped Captions' : 'AI Speaker-Colored Transcript'}`;
+                                                if (bodyHeaderTitle) bodyHeaderTitle.innerHTML = `<i class="fa-solid ${isYtSubs ? 'fa-closed-captioning' : (isGroq ? 'fa-bolt' : 'fa-brain')}"></i> ${isYtSubs ? 'Interactive Timestamped Captions' : 'AI Speaker-Colored Transcript'}`;
 
-                                                if (resultsTitle) resultsTitle.textContent = isYtSubs ? 'YouTube Captions & Interactive Transcript' : 'AI Speech Transcript (Whisper AI)';
-                                                if (resultsIcon) resultsIcon.className = `fa-solid ${isYtSubs ? 'fa-closed-captioning' : 'fa-brain'} results-icon`;
+                                                if (resultsTitle) resultsTitle.textContent = isYtSubs ? 'YouTube Captions & Interactive Transcript' : (isGroq ? 'AI Speech Transcript (Groq Turbo)' : 'AI Speech Transcript (Whisper AI)');
+                                                if (resultsIcon) resultsIcon.className = `fa-solid ${isYtSubs ? 'fa-closed-captioning' : (isGroq ? 'fa-bolt' : 'fa-brain')} results-icon`;
 
                                                 if (noticeBanner) {
                                                     if (data.notice) {

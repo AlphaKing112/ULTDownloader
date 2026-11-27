@@ -5,9 +5,14 @@ import math
 import json
 import wave
 import glob
+import uuid
 import argparse
 import tempfile
 import subprocess
+import urllib.parse
+import urllib.request
+import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 
@@ -65,6 +70,64 @@ def detect_platform(source):
     return "other"
 
 
+def resolve_lowest_hls_variant(master_url):
+    """
+    Parse an HLS master.m3u8 playlist and select either a dedicated AUDIO-only track
+    or the lowest-bandwidth video+audio variant (e.g. Kick 160p30 at 230kbps vs 1080p60 at 8.18Mbps — 35x smaller!).
+    """
+    if not master_url or ".m3u8" not in master_url.lower():
+        return master_url, None
+
+    text = ""
+    try:
+        from curl_cffi import requests as cf_requests
+        r = cf_requests.get(master_url, impersonate="chrome", timeout=15)
+        if r.status_code == 200:
+            text = r.text
+    except Exception:
+        pass
+
+    if not text:
+        try:
+            req = urllib.request.Request(master_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            return master_url, None
+
+    if "#EXT-X-STREAM-INF" not in text and "#EXT-X-MEDIA" not in text:
+        return master_url, None
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # 1. Prefer dedicated AUDIO-only media track if present
+    for line in lines:
+        if line.startswith("#EXT-X-MEDIA:") and "TYPE=AUDIO" in line and "URI=" in line:
+            uri_m = re.search(r'URI="([^"]+)"', line)
+            if uri_m:
+                return urllib.parse.urljoin(master_url, uri_m.group(1)), "Audio-Only HLS"
+
+    # 2. Otherwise pick the lowest BANDWIDTH variant (same AAC audio, tiny video payload)
+    variants = []
+    for idx, line in enumerate(lines):
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            bw_m = re.search(r"BANDWIDTH=(\d+)", line)
+            res_m = re.search(r"RESOLUTION=([0-9]+x[0-9]+)", line)
+            bw = int(bw_m.group(1)) if bw_m else 999_999_999
+            res_label = res_m.group(1) if res_m else ""
+            if idx + 1 < len(lines) and not lines[idx + 1].startswith("#"):
+                variants.append((bw, res_label, urllib.parse.urljoin(master_url, lines[idx + 1])))
+
+    if variants:
+        variants.sort(key=lambda v: v[0])
+        best_bw, best_res, best_url = variants[0]
+        kbps = max(1, best_bw // 1000)
+        label = f"{best_res} ({kbps} kbps)" if best_res else f"{kbps} kbps"
+        return best_url, label
+
+    return master_url, None
+
+
 def fetch_kick_direct_stream(source):
     """Resolve Kick clips/VODs via Kick JSON API or Kick VOD webpage og:video (.m3u8) using curl_cffi."""
     try:
@@ -92,10 +155,10 @@ def fetch_kick_direct_stream(source):
 
     vod_m = re.search(r"(?:kick\.com/video/|kick\.com/[^/]+/videos?/|kick\.com/videos/|[?&]video=)([0-9a-f-]{12,})", source, re.I)
     if vod_m:
-        uuid = vod_m.group(1)
+        vod_uuid = vod_m.group(1)
         try:
             r = cf_requests.get(
-                f"https://kick.com/api/v1/video/{uuid}",
+                f"https://kick.com/api/v1/video/{vod_uuid}",
                 impersonate="chrome",
                 timeout=15,
                 headers={"Accept": "application/json"}
@@ -125,38 +188,95 @@ def fetch_kick_direct_stream(source):
     return None
 
 
+def fetch_twitch_audio_only_stream(source):
+    """Resolve Twitch VOD's Audio_Only (or lowest 160p) HLS URL via yt-dlp -g for ultra-fast direct FFmpeg seeking."""
+    cmd = [
+        "yt-dlp", "--no-warnings", "--no-playlist",
+        "-f", "Audio_Only/audio_only/160p/worstaudio/worst",
+        "-g", source
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        if res.returncode == 0 and res.stdout.strip():
+            url = res.stdout.strip().splitlines()[0].strip()
+            if url.startswith("http"):
+                return url
+    except Exception:
+        pass
+    return None
+
+
 def download_audio_to_wav(source, platform, start_time, end_time, is_full, temp_base):
-    """Download lightweight audio for YouTube/Twitch/Kick and condition to 16kHz mono PCM WAV."""
+    """
+    Download the smallest speech-clear audio stream for YouTube, Twitch, or Kick
+    and convert directly to 16 kHz mono 16-bit PCM WAV.
+    """
     wav_path = f"{temp_base}_clean.wav"
     start_sec = parse_timestamp_to_seconds(start_time) if not is_full else 0.0
     end_sec = parse_timestamp_to_seconds(end_time) if (end_time and not is_full) else 0.0
     has_range = (not is_full) and (start_sec > 0 or end_sec > start_sec)
+    target_dur = (end_sec - start_sec) if (has_range and end_sec > start_sec) else 0.0
+    is_long_target = is_full or target_dur > 180.0
+
+    # Skip heavy per-frame dynaudnorm on long (>3m) VODs for 2x faster FFmpeg pass while keeping crisp speech bandpass
+    speech_filter = "highpass=f=80,lowpass=f=7600" if is_long_target else "highpass=f=80,lowpass=f=7600,dynaudnorm=f=200:g=15:p=0.9:m=6"
 
     raw_audio_file = None
     cookies_rejected = False
     last_err_line = ""
 
+    def stream_direct_via_ffmpeg(stream_url, label=""):
+        nonlocal last_err_line
+        # If master HLS playlist, select audio-only or lowest-bandwidth variant (up to 35x smaller!)
+        target_url, variant_label = resolve_lowest_hls_variant(stream_url)
+        if variant_label:
+            emit_progress(10.0, f"Streaming {label or 'low-bandwidth'} audio ({variant_label})...")
+        else:
+            emit_progress(10.0, f"Streaming {label or 'direct'} audio via FFmpeg...")
+
+        ff_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+        if has_range and start_sec > 0:
+            ff_cmd.extend(["-ss", f"{start_sec:.3f}"])
+        ff_cmd.extend(["-i", target_url])
+        if has_range and end_sec > start_sec:
+            ff_cmd.extend(["-t", f"{(end_sec - start_sec):.3f}"])
+        ff_cmd.extend([
+            "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
+            "-af", speech_filter,
+            wav_path
+        ])
+        timeout_sec = 420 if is_long_target else 180
+        res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout_sec)
+        if res.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1024:
+            return wav_path
+        if res.stderr:
+            last_err_line = res.stderr.strip().splitlines()[-1]
+        return None
+
     def run_ytdlp(use_cookies=True):
         nonlocal last_err_line, cookies_rejected
-        # Clean any previous raw attempts
         for old in glob.glob(f"{temp_base}_raw.*"):
             try:
                 os.remove(old)
             except Exception:
                 pass
 
-        if platform.startswith("twitch"):
-            fmt = "Audio_Only/audio_only/ba/ba*/bestaudio/worst"
+        # Always select lowest-bandwidth speech-clear audio track (never affects normal video downloads!)
+        if platform == "twitch_vod":
+            fmt = "Audio_Only/audio_only/160p/worstaudio/worst"
+        elif platform.startswith("twitch"):
+            fmt = "worstaudio/worst[height<=360]/worst/ba/best"
         elif platform == "youtube":
-            fmt = "ba[ext=m4a]/ba/ba*/bestaudio/worst"
+            # 48-64 kbps audio-only (~3x smaller than 160kbps, 0 video bytes, crystal-clear speech!)
+            fmt = "wa[abr>=40]/ba[abr<=70]/ba[ext=m4a]/ba/worstaudio/worst"
         else:
-            fmt = "ba/ba*/bestaudio/best/worst"
+            fmt = "worstaudio/worst[height<=360]/ba/bestaudio/worst"
 
         cmd = [
             "yt-dlp", "--no-warnings", "--no-playlist",
             "--js-runtimes", "deno" if os.path.exists("/usr/local/bin/deno") else "node",
             "-f", fmt,
-            "--concurrent-fragments", "5",
+            "--concurrent-fragments", "6",
             "-o", f"{temp_base}_raw.%(ext)s"
         ]
 
@@ -194,12 +314,12 @@ def download_audio_to_wav(source, platform, start_time, end_time, is_full, temp_
 
             if any(k in line_str for k in ("Downloading stream metadata", "Downloading video access token", "Downloading m3u8", "Extracting URL")) and last_stage < 8.0:
                 last_stage = 8.0
-                emit_progress(8.0, "Fetching stream manifest...")
+                emit_progress(8.0, "Fetching low-bandwidth audio manifest...")
             elif any(k in line_str for k in ("Downloading 1 format", "Opening", "[download]", "Destination")) and last_stage < 11.0:
                 last_stage = 11.0
-                emit_progress(11.0, "Buffering audio fragments...")
+                emit_progress(11.0, "Downloading compact speech audio...")
 
-        proc.wait(timeout=210)
+        proc.wait(timeout=360 if is_long_target else 210)
         if err_lines:
             last_err_line = err_lines[-1]
 
@@ -222,37 +342,23 @@ def download_audio_to_wav(source, platform, start_time, end_time, is_full, temp_
         "kick": "Kick",
     }.get(platform, "Media")
 
-    emit_progress(5.0, f"Connecting to {platform_label} audio stream...")
+    emit_progress(5.0, f"Connecting to {platform_label} compact audio stream...")
 
-    def download_kick_direct_via_ffmpeg():
-        nonlocal last_err_line
-        direct_url = fetch_kick_direct_stream(source)
-        if not direct_url:
-            return None
-        emit_progress(10.0, "Streaming Kick audio directly via FFmpeg...")
-        ff_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
-        if has_range and start_sec > 0:
-            ff_cmd.extend(["-ss", f"{start_sec:.3f}"])
-        ff_cmd.extend(["-i", direct_url])
-        if has_range and end_sec > start_sec:
-            ff_cmd.extend(["-t", f"{(end_sec - start_sec):.3f}"])
-        ff_cmd.extend([
-            "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
-            "-af", "highpass=f=80,lowpass=f=7600,dynaudnorm=f=200:g=15:p=0.9:m=6",
-            wav_path
-        ])
-        res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
-        if res.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1024:
-            return wav_path
-        if res.stderr:
-            last_err_line = res.stderr.strip().splitlines()[-1]
-        return None
-
-    # For Kick VODs, direct HLS resolution + FFmpeg fast seeking handles both legacy and new UUIDv7 VODs instantly
+    # Fast Path 1: Kick VODs -> resolve HLS master.m3u8 -> lowest 160p variant (~35x smaller!) -> FFmpeg fast seek
     if platform == "kick_vod":
-        direct_wav = download_kick_direct_via_ffmpeg()
-        if direct_wav:
-            return direct_wav, start_sec, cookies_rejected, None
+        kick_url = fetch_kick_direct_stream(source)
+        if kick_url:
+            direct_wav = stream_direct_via_ffmpeg(kick_url, label="Kick VOD")
+            if direct_wav:
+                return direct_wav, start_sec, cookies_rejected, None
+
+    # Fast Path 2: Twitch VODs -> resolve Audio_Only HLS track directly -> FFmpeg fast seek (0 video downloaded!)
+    if platform == "twitch_vod":
+        tw_audio_url = fetch_twitch_audio_only_stream(source)
+        if tw_audio_url:
+            direct_wav = stream_direct_via_ffmpeg(tw_audio_url, label="Twitch Audio-Only")
+            if direct_wav:
+                return direct_wav, start_sec, cookies_rejected, None
 
     raw_audio_file = run_ytdlp(use_cookies=True)
 
@@ -264,33 +370,34 @@ def download_audio_to_wav(source, platform, start_time, end_time, is_full, temp_
     # Kick direct API/webpage fallback via curl_cffi + FFmpeg if yt-dlp failed on Kick
     if not raw_audio_file and platform.startswith("kick"):
         emit_progress(9.0, "Using direct Kick stream extractor...")
-        direct_wav = download_kick_direct_via_ffmpeg()
-        if direct_wav:
-            return direct_wav, start_sec, cookies_rejected, None
+        kick_url = fetch_kick_direct_stream(source)
+        if kick_url:
+            direct_wav = stream_direct_via_ffmpeg(kick_url, label="Kick")
+            if direct_wav:
+                return direct_wav, start_sec, cookies_rejected, None
 
     if not raw_audio_file:
         detail = last_err_line or f"Could not download {platform_label} audio stream"
         return None, start_sec, cookies_rejected, detail
 
     # Condition downloaded audio into clean 16kHz mono PCM WAV for Whisper + acoustic speaker analysis
-    emit_progress(14.0, "Enhancing speech audio (noise & volume leveling)...")
+    emit_progress(14.0, "Preparing 16kHz speech audio...")
     try:
         ff_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", raw_audio_file,
             "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
-            "-af", "highpass=f=80,lowpass=f=7600,dynaudnorm=f=200:g=15:p=0.9:m=6",
+            "-af", speech_filter,
             wav_path
         ]
-        res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
         if res.returncode != 0 or not os.path.exists(wav_path) or os.path.getsize(wav_path) <= 1024:
-            # Simpler fallback filter if dynaudnorm fails on exotic input
             ff_simple = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", raw_audio_file, "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
                 wav_path
             ]
-            res2 = subprocess.run(ff_simple, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+            res2 = subprocess.run(ff_simple, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
             if res2.returncode != 0 or not os.path.exists(wav_path):
                 return None, start_sec, cookies_rejected, (res2.stderr or res.stderr or "FFmpeg audio conversion failed").strip()
     finally:
@@ -311,22 +418,55 @@ def convert_local_to_wav(source, temp_base):
         "-af", "highpass=f=80,lowpass=f=7600,dynaudnorm=f=200:g=15:p=0.9:m=6",
         wav_path
     ]
-    res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
     if res.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1024:
         return wav_path
     return None
 
 
-def load_wav_mono_16k(wav_path):
-    with wave.open(wav_path, "rb") as wf:
-        sr = wf.getframerate()
-        nch = wf.getnchannels()
-        nframes = wf.getnframes()
-        raw = wf.readframes(nframes)
-    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    if nch > 1:
-        samples = samples.reshape(-1, nch).mean(axis=1)
-    return samples, sr
+def get_wav_duration_seconds(wav_path):
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            sr = wf.getframerate() or 16000
+            return wf.getnframes() / float(sr)
+    except Exception:
+        return 0.0
+
+
+class WaveSegmentReader:
+    """Low-RAM disk-streaming WAV slice reader (<2 MB RAM even on multi-hour VODs!)."""
+    def __init__(self, wav_path):
+        self.wf = wave.open(wav_path, "rb")
+        self.sr = self.wf.getframerate()
+        self.nch = self.wf.getnchannels()
+        self.nframes = self.wf.getnframes()
+
+    def read_slice(self, start_sec, end_sec, max_sec=12.0):
+        # Cap individual segment read to 12s (more than enough for a rock-solid voiceprint, keeps RAM tiny)
+        eff_end = min(end_sec, start_sec + max_sec)
+        i0 = max(0, min(self.nframes, int(start_sec * self.sr)))
+        i1 = max(i0, min(self.nframes, int(eff_end * self.sr)))
+        count = i1 - i0
+        if count <= 0:
+            return np.zeros(0, dtype=np.float32)
+        self.wf.setpos(i0)
+        raw = self.wf.readframes(count)
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        if self.nch > 1:
+            samples = samples.reshape(-1, self.nch).mean(axis=1)
+        return samples
+
+    def close(self):
+        try:
+            self.wf.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 def build_mel_filterbank(sr=16000, n_fft=512, n_mels=26, fmin=80.0, fmax=7600.0):
@@ -349,7 +489,6 @@ def build_mel_filterbank(sr=16000, n_fft=512, n_mels=26, fmin=80.0, fmax=7600.0)
         if right > center:
             fb[i - 1, center:right] = (right - np.arange(center, right)) / float(right - center)
 
-    # DCT-II matrix for MFCCs 1..13 (skipping c0 energy)
     n_mfcc = 13
     k = np.arange(1, n_mfcc + 1)[:, None]
     n = np.arange(n_mels)[None, :]
@@ -357,27 +496,22 @@ def build_mel_filterbank(sr=16000, n_fft=512, n_mels=26, fmin=80.0, fmax=7600.0)
     return fb, dct
 
 
-def extract_voiceprint(audio, sr, start_sec, end_sec, mel_fb, dct_mat, freqs):
+def extract_voiceprint_from_slice(seg, sr, mel_fb, dct_mat, freqs):
     """Extract a speaker-discriminative acoustic voiceprint (MFCCs 1..13, F0 pitch, spectral timbre)."""
-    i0 = max(0, int(start_sec * sr))
-    i1 = min(len(audio), int(end_sec * sr))
-    seg = audio[i0:i1]
     if len(seg) < int(0.18 * sr):
         return None, 0.0, None
 
-    # Pre-emphasis for clearer vocal tract formants
     emphasized = np.empty_like(seg)
     emphasized[0] = seg[0]
     emphasized[1:] = seg[1:] - 0.97 * seg[:-1]
 
-    win_len = 400  # 25ms
-    hop = 160      # 10ms
+    win_len = 400
+    hop = 160
     n_fft = 512
     n_frames = 1 + (len(emphasized) - win_len) // hop
     if n_frames < 5:
         return None, 0.0, None
 
-    # Vectorized framing via stride tricks
     stride = emphasized.strides[0]
     frames = np.lib.stride_tricks.as_strided(
         emphasized, shape=(n_frames, win_len), strides=(hop * stride, stride)
@@ -400,10 +534,9 @@ def extract_voiceprint(audio, sr, start_sec, end_sec, mel_fb, dct_mat, freqs):
 
     mel_e = np.maximum(power @ mel_fb.T, 1e-10)
     log_mel = np.log(mel_e)
-    mfccs = log_mel @ dct_mat.T  # (voiced_count, 13)
+    mfccs = log_mel @ dct_mat.T
     mfcc_mean = np.mean(mfccs, axis=0)
 
-    # Spectral centroid, 85% rolloff, and low-vs-high resonance ratio
     mag = np.sqrt(power + 1e-12)
     mag_sum = np.sum(mag, axis=1) + 1e-10
     centroids = np.sum(mag * freqs[None, :], axis=1) / mag_sum
@@ -420,7 +553,7 @@ def extract_voiceprint(audio, sr, start_sec, end_sec, mel_fb, dct_mat, freqs):
     high_e = float(np.mean(np.sum(power[:, high_band], axis=1))) + 1e-10
     low_high_ratio = math.log(low_e / high_e)
 
-    # Fundamental frequency (F0) via normalized autocorrelation on 40ms frames (65Hz - 380Hz)
+    # Fundamental frequency (F0) via normalized autocorrelation (65Hz - 380Hz)
     p_win = 640
     p_hop = 320
     n_pframes = 1 + (len(seg) - p_win) // p_hop
@@ -431,15 +564,13 @@ def extract_voiceprint(audio, sr, start_sec, end_sec, mel_fb, dct_mat, freqs):
         )
         p_rms = np.sqrt(np.mean(p_frames * p_frames, axis=1) + 1e-12)
         p_thresh = max(0.015, 0.25 * float(np.percentile(p_rms, 85)))
-        lag_min = int(sr / 380.0)  # 42
-        lag_max = int(sr / 65.0)   # 246
-        # Limit pitch computation to at most 80 evenly spaced voiced frames for speed
+        lag_min = int(sr / 380.0)
+        lag_max = int(sr / 65.0)
         active_indices = np.where(p_rms > p_thresh)[0]
-        if len(active_indices) > 80:
-            active_indices = active_indices[np.linspace(0, len(active_indices) - 1, 80, dtype=int)]
+        if len(active_indices) > 60:
+            active_indices = active_indices[np.linspace(0, len(active_indices) - 1, 60, dtype=int)]
         for idx in active_indices:
             xf = p_frames[idx] - np.mean(p_frames[idx])
-            # FFT autocorrelation
             f_xf = np.fft.rfft(xf, n=1024)
             ac = np.fft.irfft(f_xf * np.conj(f_xf), n=1024)[:lag_max + 1]
             if ac[0] <= 1e-8:
@@ -447,16 +578,13 @@ def extract_voiceprint(audio, sr, start_sec, end_sec, mel_fb, dct_mat, freqs):
             ac_norm = ac / ac[0]
             window_ac = ac_norm[lag_min:lag_max + 1]
             best_rel = int(np.argmax(window_ac))
-            peak_val = float(window_ac[best_rel])
-            if peak_val >= 0.42:
+            if float(window_ac[best_rel]) >= 0.42:
                 best_lag = lag_min + best_rel
                 f0_hz = sr / float(best_lag)
                 f0_semitones.append(12.0 * math.log2(f0_hz / 100.0))
 
     pitch_st = float(np.median(f0_semitones)) if len(f0_semitones) >= 3 else None
 
-    # Build physically-scaled 17-dim voiceprint vector (no per-video z-scoring so 1 speaker stays 1 speaker!)
-    # MFCCs 1..13 capture vocal tract & mic timbre
     v_mfcc = mfcc_mean / 10.5
     v_pitch = ((pitch_st / 5.5) * 1.45) if pitch_st is not None else 0.0
     v_centroid = math.log2(max(200.0, median_centroid) / 1000.0) * 1.05
@@ -490,7 +618,6 @@ def weighted_kmeans_from_init(X, weights, init_labels, k, iters=18):
             break
         labels = new_labels
 
-    # Recompute final centroids
     for c in range(k):
         mask = labels == c
         if np.any(mask):
@@ -500,7 +627,6 @@ def weighted_kmeans_from_init(X, weights, init_labels, k, iters=18):
 
 
 def agglomerative_average_linkage(dist_mat, k):
-    """Deterministic pure-NumPy average-linkage hierarchical clustering into k clusters."""
     n = dist_mat.shape[0]
     clusters = [[i] for i in range(n)]
     while len(clusters) > k:
@@ -552,44 +678,43 @@ def compute_silhouette(dist_mat, labels, k):
 
 def diarize_segments(wav_path, segments, max_speakers=4):
     """
-    Assign speaker IDs (1..K) to Whisper segments using pure-NumPy acoustic voiceprints.
-    Automatically determines whether there is 1 speaker or multiple speakers (2..4).
+    Low-RAM streaming acoustic speaker diarization (<2 MB RAM, fast even on 1-hour+ VODs).
+    Caps clustering anchors to <=80 evenly stratified segments so clustering always finishes in <0.1s.
     """
     if not segments:
         return segments, 0
 
     try:
-        audio, sr = load_wav_mono_16k(wav_path)
+        with WaveSegmentReader(wav_path) as reader:
+            sr = reader.sr
+            if reader.nframes < sr:
+                for seg in segments:
+                    seg["speaker"] = 1
+                return segments, 1
+
+            mel_fb, dct_mat = build_mel_filterbank(sr=sr, n_fft=512, n_mels=26)
+            freqs = np.fft.rfftfreq(512, d=1.0 / sr).astype(np.float32)
+
+            vecs = []
+            voiced_secs = []
+            pitches = []
+            for seg in segments:
+                audio_slice = reader.read_slice(seg["raw_start"], seg["raw_end"])
+                v, vsec, pst = extract_voiceprint_from_slice(audio_slice, sr, mel_fb, dct_mat, freqs)
+                vecs.append(v)
+                voiced_secs.append(vsec)
+                pitches.append(pst)
     except Exception:
         for seg in segments:
             seg["speaker"] = 1
         return segments, 1
 
-    if len(audio) < sr:
-        for seg in segments:
-            seg["speaker"] = 1
-        return segments, 1
-
-    mel_fb, dct_mat = build_mel_filterbank(sr=sr, n_fft=512, n_mels=26)
-    freqs = np.fft.rfftfreq(512, d=1.0 / sr).astype(np.float32)
-
-    vecs = []
-    voiced_secs = []
-    pitches = []
-    for seg in segments:
-        v, vsec, pst = extract_voiceprint(audio, sr, seg["raw_start"], seg["raw_end"], mel_fb, dct_mat, freqs)
-        vecs.append(v)
-        voiced_secs.append(vsec)
-        pitches.append(pst)
-
-    # Fill missing pitch dims with overall median pitch so missing pitch doesn't pull a voice to 0.0
     valid_pitches = [p for p in pitches if p is not None]
     med_pitch_scaled = ((float(np.median(valid_pitches)) / 5.5) * 1.45) if valid_pitches else 0.0
     for idx, v in enumerate(vecs):
         if v is not None and pitches[idx] is None:
             v[13] = med_pitch_scaled
 
-    # Select reliable anchor segments (>= 0.65s of voiced speech)
     anchor_idx = [i for i, v in enumerate(vecs) if v is not None and voiced_secs[i] >= 0.65]
     if len(anchor_idx) < 4:
         anchor_idx = [i for i, v in enumerate(vecs) if v is not None and voiced_secs[i] >= 0.35]
@@ -599,15 +724,23 @@ def diarize_segments(wav_path, segments, max_speakers=4):
             seg["speaker"] = 1
         return segments, 1
 
+    # Cap clustering anchors to <=80 stratified across the timeline (prevents O(N^3) slowdown on 1h+ VODs!)
+    if len(anchor_idx) > 80:
+        buckets = np.array_split(anchor_idx, 80)
+        selected = []
+        for b in buckets:
+            if len(b) > 0:
+                best_in_bucket = max(b, key=lambda idx: voiced_secs[idx])
+                selected.append(int(best_in_bucket))
+        anchor_idx = selected
+
     X = np.stack([vecs[i] for i in anchor_idx], axis=0)
     weights = np.array([math.sqrt(max(0.25, voiced_secs[i])) for i in anchor_idx], dtype=np.float32)
     anchor_pitches = [pitches[i] for i in anchor_idx]
 
-    # Pairwise Euclidean distance matrix on anchor voiceprints
     diff = X[:, None, :] - X[None, :, :]
     dist_mat = np.sqrt(np.sum(diff * diff, axis=2) + 1e-12)
 
-    # Evaluate K = 2..max_k
     max_k = min(max_speakers, max(1, len(anchor_idx) // 2))
     best_k = 1
     best_score = -1.0
@@ -617,7 +750,6 @@ def diarize_segments(wav_path, segments, max_speakers=4):
         init_labels = agglomerative_average_linkage(dist_mat, k)
         labels, centroids = weighted_kmeans_from_init(X, weights, init_labels, k)
 
-        # Require every speaker cluster to be meaningful (not a 1-blip cough)
         valid_clusters = True
         for c in range(k):
             members = [anchor_idx[i] for i in range(len(anchor_idx)) if labels[i] == c]
@@ -630,7 +762,6 @@ def diarize_segments(wav_path, segments, max_speakers=4):
 
         sil = compute_silhouette(dist_mat, labels, k)
 
-        # Measure minimum acoustic separation between any two detected speaker centroids
         min_euclid = float("inf")
         min_mfcc_cos = float("inf")
         min_pitch_gap = float("inf")
@@ -653,7 +784,6 @@ def diarize_segments(wav_path, segments, max_speakers=4):
                 if cluster_pitches[a] is not None and cluster_pitches[b] is not None:
                     min_pitch_gap = min(min_pitch_gap, abs(cluster_pitches[a] - cluster_pitches[b]))
 
-        # Calibrated multi-speaker decision gate (avoids splitting a solo streamer while catching real 2+ voice convos)
         strong_euclid = (min_euclid >= 0.85 and sil >= 0.23)
         strong_pitch = (min_pitch_gap >= 3.0 and sil >= 0.19 and min_euclid >= 0.65)
         strong_timbre = (min_mfcc_cos >= 0.13 and sil >= 0.21 and min_euclid >= 0.72)
@@ -675,12 +805,10 @@ def diarize_segments(wav_path, segments, max_speakers=4):
     dp = np.full((n_seg, best_k), float("inf"), dtype=np.float64)
     back = np.zeros((n_seg, best_k), dtype=np.int32)
 
-    # Emission cost for each segment to each speaker centroid
     emit_cost = np.zeros((n_seg, best_k), dtype=np.float64)
     for i in range(n_seg):
         if vecs[i] is not None:
             d = np.linalg.norm(best_centroids - vecs[i][None, :], axis=1)
-            # Short utterances carry less acoustic confidence than longer turns
             conf = min(1.0, max(0.35, voiced_secs[i] / 1.0))
             emit_cost[i] = d * conf
         else:
@@ -692,7 +820,6 @@ def diarize_segments(wav_path, segments, max_speakers=4):
         prev_text = segments[i - 1]["text"].rstrip()
         ends_sentence = bool(prev_text and prev_text[-1] in ".?!")
 
-        # Lower switch barrier after a natural pause or sentence end; higher mid-sentence
         if gap >= 0.65:
             switch_pen = 0.06
         elif gap >= 0.30 or ends_sentence:
@@ -717,7 +844,6 @@ def diarize_segments(wav_path, segments, max_speakers=4):
     for i in range(n_seg - 2, -1, -1):
         seq[i] = int(back[i + 1, seq[i + 1]])
 
-    # Remap speaker IDs in canonical order of first appearance (Speaker 1 talks first!)
     order_map = {}
     next_id = 1
     for i, raw_cid in enumerate(seq):
@@ -745,7 +871,6 @@ def is_hallucinated_line(text, no_speech_prob=0.0, avg_logprob=0.0):
     for pat in HALLUCINATION_PATTERNS:
         if pat.match(t) and (no_speech_prob > 0.35 or avg_logprob < -0.65):
             return True
-    # Filter degenerate 4x word/phrase repetition loops
     words = t.lower().split()
     if len(words) >= 8 and len(set(words)) <= 2:
         return True
@@ -753,7 +878,6 @@ def is_hallucinated_line(text, no_speech_prob=0.0, avg_logprob=0.0):
 
 
 def split_segment_by_words(seg):
-    """Split a long Whisper segment at natural pause gaps or sentence turns for sharper speaker changes."""
     words = getattr(seg, "words", None)
     if not words or len(words) < 4:
         t = seg.text.strip()
@@ -783,7 +907,6 @@ def split_segment_by_words(seg):
             ends_punct = bool(prev_str and prev_str[-1] in ".?!")
             cur_dur = prev_end - cur_start
 
-            # Split on clear pause (>= 0.42s) OR sentence punctuation + short pause/length
             should_split = (
                 (gap >= 0.42 and len(cur_words) >= 2 and cur_dur >= 0.55)
                 or (ends_punct and gap >= 0.20 and len(cur_words) >= 3)
@@ -808,7 +931,6 @@ def split_segment_by_words(seg):
 
 
 def merge_same_speaker_turns(segments):
-    """Merge tiny consecutive fragments from the same speaker while keeping speaker switches crystal clear."""
     if not segments:
         return []
     merged = [dict(segments[0])]
@@ -830,37 +952,194 @@ def merge_same_speaker_turns(segments):
     return merged
 
 
-def transcribe_audio(wav_path, start_offset_sec=0.0, detect_speakers=True, language="en", title="", platform="other"):
+def upload_chunk_to_groq(mp3_path, api_key, language="en", prompt=""):
+    """Upload a compact 32kbps MP3 chunk to Groq whisper-large-v3-turbo using stdlib multipart HTTP."""
+    boundary = f"----ULTBoundary{uuid.uuid4().hex}"
+    fields = [
+        ("model", "whisper-large-v3-turbo"),
+        ("response_format", "verbose_json"),
+        ("temperature", "0"),
+        ("timestamp_granularities[]", "segment"),
+    ]
+    if (language or "en").lower() in ("en", "english"):
+        fields.append(("language", "en"))
+    if prompt:
+        fields.append(("prompt", prompt[:220]))
+
+    parts = []
+    for k, v in fields:
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode("utf-8"))
+
+    with open(mp3_path, "rb") as f:
+        file_bytes = f.read()
+    filename = os.path.basename(mp3_path)
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: audio/mpeg\r\n\r\n".encode("utf-8")
+    )
+    parts.append(file_bytes)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(parts)
+
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/audio/transcriptions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "ULTDownloader/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def transcribe_via_groq(wav_path, api_key, language="en", title="", temp_base=""):
+    """
+    Ultra-fast cloud transcription via Groq whisper-large-v3-turbo (~200x real-time!).
+    Splits long VODs into 10-min 32kbps MP3 chunks (~2.4 MB each) and uploads up to 3 in parallel.
+    """
+    total_sec = get_wav_duration_seconds(wav_path)
+    if total_sec <= 0.2:
+        return [], language or "en", None
+
+    chunk_sec = 600.0  # 10-minute chunks (~2.4 MB at 32kbps MP3)
+    n_chunks = max(1, int(math.ceil(total_sec / chunk_sec)))
+    chunk_files = []
+
+    emit_progress(20.0, f"Encoding {n_chunks} compact chunk{'s' if n_chunks > 1 else ''} for Groq Turbo AI...")
+    try:
+        for i in range(n_chunks):
+            c_start = i * chunk_sec
+            c_path = f"{temp_base}_groq_{i}.mp3"
+            ff_cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-ss", f"{c_start:.3f}", "-i", wav_path,
+                "-t", f"{chunk_sec:.3f}",
+                "-ac", "1", "-ar", "16000", "-b:a", "32k",
+                c_path
+            ]
+            res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+            if res.returncode == 0 and os.path.exists(c_path) and os.path.getsize(c_path) > 256:
+                chunk_files.append((i, c_start, c_path))
+
+        if not chunk_files:
+            return None, None, "Could not encode audio chunks for Groq"
+
+        clean_groq_title = re.sub(r"[^\w\s,'-]", " ", title or "").strip()[:120]
+        prompt = f"Natural livestream or podcast conversation. {clean_groq_title}".strip()
+        emit_progress(32.0, f"Transcribing via Groq Whisper Large-v3-Turbo ({len(chunk_files)} chunk{'s' if len(chunk_files) > 1 else ''})...")
+
+        chunk_results = {}
+        detected_lang = language or "en"
+        completed = 0
+
+        with ThreadPoolExecutor(max_workers=min(3, len(chunk_files))) as pool:
+            fut_map = {
+                pool.submit(upload_chunk_to_groq, c_path, api_key, language, prompt): (idx, c_start)
+                for idx, c_start, c_path in chunk_files
+            }
+            for fut in as_completed(fut_map):
+                idx, c_start = fut_map[fut]
+                data = fut.result()
+                if data.get("language"):
+                    detected_lang = data["language"]
+                segs = []
+                for s in data.get("segments") or []:
+                    txt = (s.get("text") or "").strip()
+                    if not is_hallucinated_line(
+                        txt,
+                        no_speech_prob=float(s.get("no_speech_prob") or 0.0),
+                        avg_logprob=float(s.get("avg_logprob") or 0.0),
+                    ):
+                        segs.append({
+                            "raw_start": c_start + float(s.get("start") or 0.0),
+                            "raw_end": c_start + float(s.get("end") or 0.0),
+                            "text": txt,
+                        })
+                chunk_results[idx] = segs
+                completed += 1
+                pct = 32.0 + (completed / float(len(chunk_files))) * 54.0
+                emit_progress(pct, f"Groq Turbo AI: finished chunk {completed}/{len(chunk_files)}...")
+
+        all_segments = []
+        for idx in sorted(chunk_results.keys()):
+            all_segments.extend(chunk_results[idx])
+        return all_segments, detected_lang, None
+    except Exception as e:
+        return None, None, str(e)
+    finally:
+        for _, _, c_path in chunk_files:
+            try:
+                os.remove(c_path)
+            except Exception:
+                pass
+
+
+def transcribe_via_local_whisper(wav_path, language="en", title="", detect_speakers=True):
+    """Optimized local faster-whisper with BatchedInferencePipeline for long VODs and optional local GPU support."""
     try:
         from faster_whisper import WhisperModel
     except ImportError:
-        return None, None, None, "faster-whisper library is not installed in this environment. Please install it with 'pip install faster-whisper'."
+        return None, None, None, "faster-whisper library is not installed in this environment."
 
     is_render = bool(os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"))
     use_english_only = (language or "en").lower() in ("en", "english")
+    wav_dur = get_wav_duration_seconds(wav_path)
+    is_long_audio = wav_dur > 180.0
+
+    # Auto-detect NVIDIA GPU locally ONLY if cuBLAS + cuDNN 9 native libraries are actually loadable (avoids C++ abort!)
+    device = "cpu"
+    compute_type = "int8"
+    if not is_render:
+        try:
+            import ctypes
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                if sys.platform == "win32":
+                    ctypes.CDLL("cublas64_12.dll")
+                    ctypes.CDLL("cudnn_ops64_9.dll")
+                else:
+                    ctypes.CDLL("libcublas.so.12")
+                    ctypes.CDLL("libcudnn_ops.so.9")
+                device = "cuda"
+                compute_type = "float16"
+        except Exception:
+            device = "cpu"
+            compute_type = "int8"
 
     if is_render:
         model_name = "tiny.en" if use_english_only else "tiny"
         cpu_threads = 2
-        beam_size = 2
+        beam_size = 1 if is_long_audio else 2
     else:
         model_name = "base.en" if use_english_only else "base"
         cpu_threads = min(8, os.cpu_count() or 4)
-        beam_size = 3
+        beam_size = 1 if is_long_audio else 3
 
     loaded_model_name = model_name
+    model = None
     try:
-        model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=cpu_threads)
-    except Exception as model_err:
-        fallback_name = "tiny.en" if use_english_only else "tiny"
-        if model_name != fallback_name:
+        model = WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=cpu_threads)
+    except Exception as first_err:
+        # If CUDA DLLs (cuBLAS/cuDNN) are missing locally, fall back cleanly to CPU int8
+        if device == "cuda":
+            device = "cpu"
+            compute_type = "int8"
             try:
-                loaded_model_name = fallback_name
-                model = WhisperModel(fallback_name, device="cpu", compute_type="int8", cpu_threads=1)
-            except Exception:
-                return None, None, None, f"Whisper model load error: {str(model_err)}"
-        else:
-            return None, None, None, f"Whisper model load error: {str(model_err)}"
+                model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=cpu_threads)
+            except Exception as cpu_err:
+                first_err = cpu_err
+        if model is None:
+            fallback_name = "tiny.en" if use_english_only else "tiny"
+            if model_name != fallback_name:
+                try:
+                    loaded_model_name = fallback_name
+                    model = WhisperModel(fallback_name, device="cpu", compute_type="int8", cpu_threads=1)
+                except Exception:
+                    return None, None, None, f"Whisper model load error: {str(first_err)}"
+            else:
+                return None, None, None, f"Whisper model load error: {str(first_err)}"
 
     prompt_bits = ["Natural spoken conversation, livestream or podcast dialogue with proper punctuation."]
     clean_title = re.sub(r"[^\w\s,'-]", " ", title or "").strip()
@@ -868,33 +1147,66 @@ def transcribe_audio(wav_path, start_offset_sec=0.0, detect_speakers=True, langu
         prompt_bits.append(f"Topic: {clean_title[:120]}.")
     initial_prompt = " ".join(prompt_bits)
 
-    transcribe_kwargs = dict(
-        beam_size=beam_size,
-        best_of=1,
-        temperature=(0.0, 0.2),
-        condition_on_previous_text=False,
-        no_speech_threshold=0.60,
-        log_prob_threshold=-1.0,
-        compression_ratio_threshold=2.4,
-        repetition_penalty=1.1,
-        vad_filter=True,
-        vad_parameters=dict(
-            threshold=0.42,
-            min_speech_duration_ms=200,
-            min_silence_duration_ms=350,
-            speech_pad_ms=180
-        ),
-        word_timestamps=True,
-        initial_prompt=initial_prompt
-    )
-    if use_english_only:
-        transcribe_kwargs["language"] = "en"
+    use_batched = is_long_audio
+    segments_gen = None
+    info = None
+    mode_tag = f"{loaded_model_name}{'·GPU' if device == 'cuda' else ''}"
 
-    segments_gen, info = model.transcribe(wav_path, **transcribe_kwargs)
+    if use_batched:
+        try:
+            from faster_whisper import BatchedInferencePipeline
+            batched = BatchedInferencePipeline(model=model)
+            batch_size = 16 if device == "cuda" else (4 if is_render else 8)
+            batch_kwargs = dict(
+                batch_size=batch_size,
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.60,
+                log_prob_threshold=-1.0,
+                compression_ratio_threshold=2.4,
+                repetition_penalty=1.1,
+                without_timestamps=False,
+                word_timestamps=False,
+                vad_filter=True,
+                vad_parameters=dict(threshold=0.42, min_speech_duration_ms=200, min_silence_duration_ms=350, speech_pad_ms=180),
+                initial_prompt=initial_prompt,
+            )
+            if use_english_only:
+                batch_kwargs["language"] = "en"
+            segments_gen, info = batched.transcribe(wav_path, **batch_kwargs)
+            mode_tag = f"{mode_tag}·Batched"
+        except Exception:
+            use_batched = False
 
-    total_sec = max(1.0, float(info.duration or 1.0))
+    if not use_batched:
+        transcribe_kwargs = dict(
+            beam_size=beam_size,
+            best_of=1,
+            temperature=0.0 if is_long_audio else (0.0, 0.2),
+            condition_on_previous_text=False,
+            no_speech_threshold=0.60,
+            log_prob_threshold=-1.0,
+            compression_ratio_threshold=2.4,
+            repetition_penalty=1.1,
+            vad_filter=True,
+            vad_parameters=dict(
+                threshold=0.42,
+                min_speech_duration_ms=200,
+                min_silence_duration_ms=350,
+                speech_pad_ms=180
+            ),
+            word_timestamps=not is_long_audio,
+            initial_prompt=initial_prompt
+        )
+        if use_english_only:
+            transcribe_kwargs["language"] = "en"
+        segments_gen, info = model.transcribe(wav_path, **transcribe_kwargs)
+
+    total_sec = max(1.0, float(getattr(info, "duration", 0.0) or wav_dur or 1.0))
     tot_str = format_ts(total_sec)
-    emit_progress(20.0, f"Transcribing dialogue ({loaded_model_name}): 00:00 / {tot_str}")
+    emit_progress(20.0, f"Transcribing dialogue ({mode_tag}): 00:00 / {tot_str}")
 
     raw_segments = []
     for s in segments_gen:
@@ -904,15 +1216,47 @@ def transcribe_audio(wav_path, start_offset_sec=0.0, detect_speakers=True, langu
             no_speech_prob=float(getattr(s, "no_speech_prob", 0.0) or 0.0),
             avg_logprob=float(getattr(s, "avg_logprob", 0.0) or 0.0)
         ):
-            sub_chunks = split_segment_by_words(s)
-            for ch in sub_chunks:
-                if not is_hallucinated_line(ch["text"]):
-                    raw_segments.append(ch)
+            if not is_long_audio:
+                sub_chunks = split_segment_by_words(s)
+                for ch in sub_chunks:
+                    if not is_hallucinated_line(ch["text"]):
+                        raw_segments.append(ch)
+            else:
+                raw_segments.append({"raw_start": float(s.start), "raw_end": float(s.end), "text": text_clean})
 
         current_sec = min(total_sec, float(s.end))
         max_transcribe_pct = 86.0 if detect_speakers else 98.0
         pct = min(max_transcribe_pct, 20.0 + (current_sec / total_sec) * (max_transcribe_pct - 20.0))
-        emit_progress(pct, f"Transcribing dialogue: {format_ts(current_sec)} / {tot_str}")
+        emit_progress(pct, f"Transcribing ({mode_tag}): {format_ts(current_sec)} / {tot_str}")
+
+    return raw_segments, getattr(info, "language", language) or "en", mode_tag, None
+
+
+def transcribe_audio(wav_path, start_offset_sec=0.0, detect_speakers=True, language="en", title="", platform="other", temp_base=""):
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+    raw_segments = None
+    detected_lang = language or "en"
+    loaded_model_name = ""
+    source_tag = "whisper-ai"
+
+    # Prefer Groq Cloud Whisper Large-v3-Turbo if GROQ_API_KEY is configured (~200x real-time!)
+    if groq_key:
+        g_segs, g_lang, g_err = transcribe_via_groq(wav_path, groq_key, language=language, title=title, temp_base=temp_base)
+        if g_err is None and g_segs is not None:
+            raw_segments = g_segs
+            detected_lang = g_lang or detected_lang
+            loaded_model_name = "groq/whisper-large-v3-turbo"
+            source_tag = "groq-whisper"
+        else:
+            emit_progress(19.0, "Groq Turbo unavailable — falling back to local Whisper AI...")
+
+    if raw_segments is None:
+        emit_progress(18.0, "Loading Whisper AI neural model...")
+        raw_segments, detected_lang, loaded_model_name, err_msg = transcribe_via_local_whisper(
+            wav_path, language=language, title=title, detect_speakers=detect_speakers
+        )
+        if err_msg:
+            return None, None, err_msg
 
     speaker_count = 1 if raw_segments else 0
     if detect_speakers and raw_segments:
@@ -925,7 +1269,6 @@ def transcribe_audio(wav_path, start_offset_sec=0.0, detect_speakers=True, langu
             seg["speaker"] = 1
         raw_segments = merge_same_speaker_turns(raw_segments)
 
-    # Shift timestamps by start_offset_sec and compute speaker statistics
     speaker_stats = {}
     formatted_segments = []
     formatted_lines = []
@@ -971,17 +1314,18 @@ def transcribe_audio(wav_path, start_offset_sec=0.0, detect_speakers=True, langu
         speakers_list.append(st)
 
     meta = {
-        "language": getattr(info, "language", language) or "en",
+        "language": detected_lang or "en",
         "model": loaded_model_name,
+        "source": source_tag,
         "speakerCount": len(speakers_list),
         "speakers": speakers_list,
         "segments": formatted_segments
     }
-    return "\n".join(formatted_lines), meta, None, None
+    return "\n".join(formatted_lines), meta, None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Local Whisper AI + Speaker Detection for ULT Downloader")
+    parser = argparse.ArgumentParser(description="Whisper AI + Low-Bandwidth Audio + Speaker Detection for ULT Downloader")
     parser.add_argument("source", help="Media URL or local file path")
     parser.add_argument("--start", help="Start time (HH:MM:SS)", default="")
     parser.add_argument("--end", help="End time (HH:MM:SS)", default="")
@@ -1037,14 +1381,14 @@ def main():
                 print(json.dumps({"success": False, "error": "Failed to convert local audio to WAV"}))
                 sys.exit(0)
 
-        emit_progress(18.0, "Loading Whisper AI neural model...")
-        transcript, meta, _, err_msg = transcribe_audio(
+        transcript, meta, err_msg = transcribe_audio(
             wav_path,
             start_offset_sec=start_offset_sec,
             detect_speakers=not args.no_speakers,
             language=args.language,
             title=args.title,
-            platform=platform
+            platform=platform,
+            temp_base=temp_base
         )
         if err_msg:
             print(json.dumps({"success": False, "error": err_msg, "platform": platform}))
@@ -1066,7 +1410,7 @@ def main():
             "language": meta["language"],
             "model": meta["model"],
             "platform": platform,
-            "source": "whisper-ai",
+            "source": meta["source"],
             "cookiesRejected": cookies_rejected,
             "notice": notice
         }))

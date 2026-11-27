@@ -1125,7 +1125,12 @@ const server = http.createServer((req, res) => {
     // API Health Check
     if (pathname === '/api/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ status: 'ok', server: 'ULTDownloader Backend', uptime: process.uptime() }));
+        return res.end(JSON.stringify({
+            status: 'ok',
+            server: 'ULTDownloader Backend',
+            uptime: process.uptime(),
+            groqConfigured: Boolean(process.env.GROQ_API_KEY)
+        }));
     }
 
     // API Channel Video Browser: list a streamer's VODs / highlights / clips on Twitch or Kick
@@ -2519,7 +2524,7 @@ const server = http.createServer((req, res) => {
                                     language: result.language,
                                     model: result.model,
                                     platform: result.platform || platform,
-                                    source: 'whisper-ai',
+                                    source: result.source || 'whisper-ai',
                                     notice: result.notice
                                 });
                             } else if (result.error) {
