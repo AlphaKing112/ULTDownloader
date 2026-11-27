@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=4.1">
+    <link rel="stylesheet" href="style.css?v=4.2">
 </head>
 <body>
     <div class="app-container">
@@ -647,7 +647,7 @@
                                 <span class="presets-label"><i class="fa-solid fa-bolt"></i> Quick Presets:</span>
                                 <div class="transcript-presets-row">
                                     <button type="button" class="transcript-preset-pill active" onclick="setTranscriptPreset('auto')">⚡ Auto (Fast)</button>
-                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('5m')">⏱️ First 5m</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('5m')">⏱️ 5m</button>
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('15m')">⏱️ 15m</button>
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('30m')">⏱️ 30m</button>
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('full')">🌐 Full Stream</button>
@@ -802,6 +802,10 @@
                             <i class="fa-solid fa-stopwatch text-purple"></i>
                             <span class="player-time-label">Position:</span>
                             <span class="player-time-badge" id="player-live-time-display">00:00:00</span>
+                            <label class="player-autosync-toggle" title="Automatically set Start Time to your current player position as you browse or scrub the video">
+                                <input type="checkbox" id="player-auto-sync-start" checked>
+                                <span>Auto Start</span>
+                            </label>
                         </div>
                         <div class="player-toolbar-buttons">
                             <button type="button" class="btn btn-primary btn-sm btn-capture-thumb" id="btn-player-capture-thumb" onclick="captureThumbnailFromPlayer()" title="Grab frame at current player position (or Default Cover at 00:00:00)">
@@ -1103,6 +1107,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=4.5"></script>
+    <script src="app.js?v=4.6"></script>
 </body>
 </html>

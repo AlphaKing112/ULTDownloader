@@ -1276,6 +1276,29 @@ input[type="number"] {
     letter-spacing: 0.5px;
 }
 
+.player-autosync-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #a7f3d0;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.player-autosync-toggle input {
+    accent-color: #10b981;
+    cursor: pointer;
+    margin: 0;
+}
+
 .player-toolbar-buttons {
     display: flex;
     align-items: center;

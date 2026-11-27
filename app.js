@@ -306,7 +306,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (sectionStartInput) {
-        sectionStartInput.addEventListener('input', () => {
+        sectionStartInput.addEventListener('input', (e) => {
+            if (e && e.isTrusted) manualStartEditActive = true;
             updateSectionDurationDisplay();
             updateGeneratedCommand();
         });
@@ -449,20 +450,25 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!transcriptStartInput || !transcriptEndInput) return;
         document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
 
+        const playerSec = typeof getPlayerCurrentTime === 'function' ? Math.floor(getPlayerCurrentTime() || 0) : 0;
+        const typedStartSec = transcriptStartInput.value.trim() ? Math.floor(parseTimestampToSeconds(transcriptStartInput.value)) : 0;
+        const baseStartSec = playerSec > 0 ? playerSec : typedStartSec;
+
         if (preset === 'auto') {
             transcriptStartInput.value = '';
             transcriptEndInput.value = '';
+            manualStartEditActive = true;
         } else if (preset === '5m') {
-            transcriptStartInput.value = '00:00:00';
-            transcriptEndInput.value = '00:05:00';
+            transcriptStartInput.value = formatSecondsToHHMMSS(baseStartSec);
+            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 300);
         } else if (preset === '15m') {
-            transcriptStartInput.value = '00:00:00';
-            transcriptEndInput.value = '00:15:00';
+            transcriptStartInput.value = formatSecondsToHHMMSS(baseStartSec);
+            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 900);
         } else if (preset === '30m') {
-            transcriptStartInput.value = '00:00:00';
-            transcriptEndInput.value = '00:30:00';
+            transcriptStartInput.value = formatSecondsToHHMMSS(baseStartSec);
+            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 1800);
         } else if (preset === 'full') {
-            transcriptStartInput.value = '';
+            transcriptStartInput.value = baseStartSec > 0 ? formatSecondsToHHMMSS(baseStartSec) : '';
             transcriptEndInput.value = 'Full';
         }
 
@@ -485,7 +491,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (transcriptStartInput) {
-        transcriptStartInput.addEventListener('input', () => {
+        transcriptStartInput.addEventListener('input', (e) => {
+            if (e && e.isTrusted) manualStartEditActive = true;
             document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
             updateTranscriptDurationDisplay();
             updateGeneratedCommand();
@@ -1729,6 +1736,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const videoEl = document.getElementById('direct-html5-player');
         if (!videoEl) return;
 
+        videoEl.addEventListener('seeked', () => {
+            const cur = Number(videoEl.currentTime || 0);
+            const liveTimeElem = document.getElementById('player-live-time-display');
+            if (liveTimeElem) liveTimeElem.textContent = formatSecondsToHHMMSS(cur);
+            if (cur > 0) syncStartTimeFromPlayer(cur, { isExplicitSeek: true });
+        });
+
         const handlePlayFail = () => {
             if (fallbackIframeSrc && playerContainer) {
                 cleanupDirectHtml5Player();
@@ -2155,16 +2169,107 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 250);
     };
 
+    // Auto-Sync Start Time when browsing / scrubbing the embedded player
+    let lastTickerPlayerSec = 0;
+    let lastAppliedAutoStartSec = -1;
+    let manualStartEditActive = false;
+    let suppressAutoSyncUntil = 0;
+
+    function syncStartTimeFromPlayer(rawSec, { isExplicitSeek = false } = {}) {
+        const autoSyncCheckbox = document.getElementById('player-auto-sync-start');
+        if (autoSyncCheckbox && !autoSyncCheckbox.checked) return;
+        if (clipPreviewLoopTimer) return;
+        if (Date.now() < suppressAutoSyncUntil) return;
+
+        const sec = Math.floor(Number(rawSec) || 0);
+        if (sec <= 0) return;
+
+        // If user manually typed a start time, pause passive playback syncing until they scrub/seek again
+        if (isExplicitSeek) {
+            manualStartEditActive = false;
+        } else if (manualStartEditActive) {
+            return;
+        }
+
+        const activeElId = document.activeElement?.id || '';
+        if (['transcript-start', 'transcript-end', 'section-start', 'section-end', 'thumb-timestamp'].includes(activeElId)) {
+            return;
+        }
+
+        if (!isExplicitSeek && sec === lastAppliedAutoStartSec) return;
+        lastAppliedAutoStartSec = sec;
+        const formatted = formatSecondsToHHMMSS(sec);
+
+        if (activeTabId === 'tab-yt-tags' && transcriptStartInput && transcriptEndInput) {
+            const mode = document.querySelector('input[name="analysis-mode"]:checked')?.value || 'tags';
+            if (mode !== 'transcript') return;
+
+            const prevStartStr = transcriptStartInput.value.trim();
+            const prevEndStr = transcriptEndInput.value.trim();
+            const prevEndLow = prevEndStr.toLowerCase();
+
+            // Preserve the user's chosen duration window (e.g. 5m, 15m, 30m) or default to 5m when sliding End Time
+            let windowSec = 300;
+            if (prevEndStr && prevEndLow !== 'full') {
+                const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
+                const prevE = parseTimestampToSeconds(prevEndStr);
+                if (prevE > prevS) windowSec = prevE - prevS;
+            }
+
+            transcriptStartInput.value = formatted;
+            if (prevEndLow !== 'full') {
+                const curEndSec = prevEndStr ? parseTimestampToSeconds(prevEndStr) : 0;
+                if (!prevEndStr || curEndSec <= sec || isExplicitSeek) {
+                    transcriptEndInput.value = formatSecondsToHHMMSS(sec + windowSec);
+                }
+            }
+            updateTranscriptDurationDisplay();
+            updateGeneratedCommand();
+        } else if (activeTabId === 'tab-section-clipper' && sectionStartInput && sectionEndInput) {
+            const prevStartStr = sectionStartInput.value.trim();
+            const prevEndStr = sectionEndInput.value.trim();
+            let windowSec = 60;
+            if (prevEndStr) {
+                const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
+                const prevE = parseTimestampToSeconds(prevEndStr);
+                if (prevE > prevS) windowSec = prevE - prevS;
+            }
+            sectionStartInput.value = formatted;
+            const curEndSec = prevEndStr ? parseTimestampToSeconds(prevEndStr) : 0;
+            if (!prevEndStr || curEndSec <= sec) {
+                sectionEndInput.value = formatSecondsToHHMMSS(sec + windowSec);
+            }
+            updateSectionDurationDisplay();
+            updateGeneratedCommand();
+        } else if (activeTabId === 'tab-yt-thumbnail') {
+            const thumbTsInput = document.getElementById('thumb-timestamp');
+            if (thumbTsInput && thumbTsInput.value !== formatted) {
+                thumbTsInput.value = formatted;
+                updateActionBtnForTab();
+                updateGeneratedCommand();
+            }
+        }
+    }
+
     // Live Player Position Ticker
     setInterval(() => {
         const liveTimeElem = document.getElementById('player-live-time-display');
         if (!liveTimeElem) return;
-        if (activePlayerType === 'none' || (mediaPlayerCard && mediaPlayerCard.classList.contains('hidden'))) return;
+        if (activePlayerType === 'none' || (mediaPlayerCard && mediaPlayerCard.classList.contains('hidden'))) {
+            lastTickerPlayerSec = 0;
+            lastAppliedAutoStartSec = -1;
+            return;
+        }
 
         const sec = getPlayerCurrentTime();
         const html5Video = document.getElementById('direct-html5-player');
         if (sec > 0 || ytPlayerInstance || twitchPlayerInstance || html5Video) {
             liveTimeElem.textContent = formatSecondsToHHMMSS(sec);
+            if (sec > 0) {
+                const jumped = Math.abs(sec - lastTickerPlayerSec) >= 2.0;
+                syncStartTimeFromPlayer(sec, { isExplicitSeek: jumped });
+            }
+            lastTickerPlayerSec = sec;
         }
     }, 500);
 
@@ -2466,6 +2571,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Jump Player to Timestamp (Interactive Transcript Click) ---
     window.jumpToPlayerTimestamp = async function(seconds, timeLabel, rowElem) {
         if (typeof seconds !== 'number' || isNaN(seconds)) return;
+        suppressAutoSyncUntil = Date.now() + 2500;
+        manualStartEditActive = true;
 
         // If player is hidden or not embedded yet, embed it using the active URL
         if (activePlayerType === 'none' || !mediaPlayerCard || mediaPlayerCard.classList.contains('hidden')) {
