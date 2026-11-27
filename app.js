@@ -1725,14 +1725,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function mountDirectHtml5Video(streamUrl, fallbackIframeSrc = null) {
         if (!playerContainer) return;
         cleanupDirectHtml5Player();
-        playerContainer.innerHTML = `<video id="direct-html5-player" controls playsinline style="width:100%;height:320px;background:#000;border-radius:12px;outline:none;"></video>`;
+        playerContainer.innerHTML = `<video id="direct-html5-player" controls playsinline style="width:100%;height:100%;display:block;background:#000;object-fit:contain;outline:none;"></video>`;
         const videoEl = document.getElementById('direct-html5-player');
         if (!videoEl) return;
 
         const handlePlayFail = () => {
             if (fallbackIframeSrc && playerContainer) {
                 cleanupDirectHtml5Player();
-                playerContainer.innerHTML = `<iframe src="${fallbackIframeSrc}" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                playerContainer.innerHTML = `<iframe src="${fallbackIframeSrc}" style="border:none;width:100%;height:100%;display:block;" allowfullscreen="true"></iframe>`;
             }
         };
 
@@ -1839,7 +1839,7 @@ document.addEventListener('DOMContentLoaded', () => {
             await loadYtIframeApi();
 
             ytPlayerInstance = new YT.Player('yt-player-target', {
-                height: '320',
+                height: '100%',
                 width: '100%',
                 videoId: ytId,
                 playerVars: { autoplay: 0, enablejsapi: 1 },
@@ -1877,7 +1877,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (playerTitle) playerTitle.textContent = `Twitch VOD Player (ID: ${vodId})`;
                 twitchPlayerInstance = new Twitch.Player('twitch-player-target', {
                     width: '100%',
-                    height: 320,
+                    height: '100%',
                     video: vodId,
                     autoplay: false,
                     parent: [currentHost]
@@ -1896,11 +1896,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             clipDirectUrlCache.set(clipId, data.previewUrl);
                             mountDirectHtml5Video(data.previewUrl, fallbackIframe);
                         } else if (playerContainer) {
-                            playerContainer.innerHTML = `<iframe src="${fallbackIframe}" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                            playerContainer.innerHTML = `<iframe src="${fallbackIframe}" style="border:none;width:100%;height:100%;display:block;" allowfullscreen="true"></iframe>`;
                         }
                     } catch (e) {
                         if (playerContainer) {
-                            playerContainer.innerHTML = `<iframe src="${fallbackIframe}" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                            playerContainer.innerHTML = `<iframe src="${fallbackIframe}" style="border:none;width:100%;height:100%;display:block;" allowfullscreen="true"></iframe>`;
                         }
                     }
                 }
@@ -1934,7 +1934,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (kickVodId || kickClipId) {
                 if (playerTitle) playerTitle.textContent = kickVodId ? `Kick VOD Player (${channelSlug ? '@' + channelSlug : kickVodId.slice(0, 8) + '...'})` : `Kick Clip Player (${kickClipId})`;
                 if (playerContainer) {
-                    playerContainer.innerHTML = `<div style="height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#0a0b12;border-radius:12px;color:#94a3b8;font-size:13px;"><i class="fa-solid fa-spinner fa-spin" style="font-size:22px;color:#53fc18;"></i><span>Loading Kick ${kickVodId ? 'VOD' : 'Clip'} stream...</span></div>`;
+                    playerContainer.innerHTML = `<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#0a0b12;color:#94a3b8;font-size:13px;"><i class="fa-solid fa-spinner fa-spin" style="font-size:22px;color:#53fc18;"></i><span>Loading Kick ${kickVodId ? 'VOD' : 'Clip'} stream...</span></div>`;
                 }
                 const apiUrl = kickVodId
                     ? `/api/clip-preview?platform=kick&vodId=${encodeURIComponent(kickVodId)}&url=${encodeURIComponent(url)}${channelSlug ? `&channel=${encodeURIComponent(channelSlug)}` : ''}`
@@ -1954,7 +1954,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Never load player.kick.com/<vodId> (Kick rejects VOD UUIDs with "This embed seems to be misconfigured")
                 if (playerContainer) {
-                    playerContainer.innerHTML = `<div style="height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center;background:#0a0b12;border:1px solid rgba(83,252,24,0.2);border-radius:12px;color:#cbd5e1;"><i class="fa-solid fa-bolt" style="font-size:26px;color:#53fc18;"></i><div style="font-weight:600;">Kick ${kickVodId ? 'VOD' : 'Clip'} preview stream unavailable</div><div style="font-size:12px;color:#94a3b8;max-width:380px;">Kick did not return a playable preview stream for this link (it may be expired, sub-only, or still processing). You can still run Download or AI Transcript directly.</div><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="margin-top:4px;text-decoration:none;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open on Kick</a></div>`;
+                    playerContainer.innerHTML = `<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center;background:#0a0b12;border:1px solid rgba(83,252,24,0.2);color:#cbd5e1;"><i class="fa-solid fa-bolt" style="font-size:26px;color:#53fc18;"></i><div style="font-weight:600;">Kick ${kickVodId ? 'VOD' : 'Clip'} preview stream unavailable</div><div style="font-size:12px;color:#94a3b8;max-width:380px;">Kick did not return a playable preview stream for this link (it may be expired, sub-only, or still processing). You can still run Download or AI Transcript directly.</div><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="margin-top:4px;text-decoration:none;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open on Kick</a></div>`;
                 }
                 logToConsole(`[Player] Kick ${kickVodId ? 'VOD' : 'Clip'} preview stream unavailable for: ${url}`, 'system');
                 return;
@@ -1965,7 +1965,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (playerContainer && channelSlug) {
-                playerContainer.innerHTML = `<iframe src="https://player.kick.com/${encodeURIComponent(channelSlug)}?autoplay=false&muted=false" height="320" width="100%" style="border:none;border-radius:12px;width:100%;height:320px;" allowfullscreen="true"></iframe>`;
+                playerContainer.innerHTML = `<iframe src="https://player.kick.com/${encodeURIComponent(channelSlug)}?autoplay=false&muted=false" style="border:none;width:100%;height:100%;display:block;" allowfullscreen="true"></iframe>`;
             }
             logToConsole(`[Player] Kick player loaded for: ${url}`, 'info');
         }
