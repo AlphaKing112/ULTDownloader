@@ -598,7 +598,7 @@
                                     <span class="transcript-platform-badge hidden" id="transcript-platform-badge"></span>
                                 </span>
                                 <div class="transcript-range-actions">
-                                    <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-bolt"></i> Auto (Whisper AI · 5m VOD)</span>
+                                    <span class="badge-duration valid" id="transcript-duration-badge"><i class="fa-solid fa-stopwatch"></i> Total: 00:01:00 (1m 0s)</span>
                                     <button type="button" class="btn-sync-range" onclick="syncTranscriptRangeFromClipper()" title="Import Start and End times from Section Clipper">
                                         <i class="fa-solid fa-arrows-rotate"></i> Sync from Clipper
                                     </button>
@@ -631,13 +631,13 @@
                                 <div class="form-group flex-1">
                                     <label for="transcript-start"><i class="fa-regular fa-clock"></i> Start Time (Optional)</label>
                                     <div class="input-wrapper">
-                                        <input type="text" id="transcript-start" placeholder="00:00:00" value="">
+                                        <input type="text" id="transcript-start" placeholder="00:00:00" value="00:00:00">
                                     </div>
                                 </div>
                                 <div class="form-group flex-1">
                                     <label for="transcript-end"><i class="fa-regular fa-clock"></i> End Time (Optional)</label>
                                     <div class="input-wrapper">
-                                        <input type="text" id="transcript-end" placeholder="Auto" value="">
+                                        <input type="text" id="transcript-end" placeholder="00:01:00" value="00:01:00">
                                     </div>
                                 </div>
                             </div>
@@ -646,10 +646,9 @@
                             <div class="transcript-presets-wrapper">
                                 <span class="presets-label"><i class="fa-solid fa-bolt"></i> Quick Presets:</span>
                                 <div class="transcript-presets-row">
-                                    <button type="button" class="transcript-preset-pill active" onclick="setTranscriptPreset('auto')">⚡ Auto (Fast)</button>
-                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('5m')">⏱️ 5m</button>
-                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('15m')">⏱️ 15m</button>
-                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('30m')">⏱️ 30m</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('30s')">⏱️ 30s</button>
+                                    <button type="button" class="transcript-preset-pill active" onclick="setTranscriptPreset('1m')">⏱️ 1m</button>
+                                    <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('2m')">⏱️ 2m</button>
                                     <button type="button" class="transcript-preset-pill" onclick="setTranscriptPreset('full')">🌐 Full Stream</button>
                                 </div>
                             </div>
@@ -1107,6 +1106,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=4.6"></script>
+    <script src="app.js?v=4.7"></script>
 </body>
 </html>

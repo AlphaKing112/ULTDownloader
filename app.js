@@ -415,7 +415,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!startVal && !endVal) {
             const label = selectedTranscriptEngine === 'captions'
                 ? 'Auto (Instant Full YT Subs)'
-                : 'Auto (Whisper AI · 5m VOD)';
+                : 'Default (Whisper AI · 60s)';
             transcriptDurationBadge.innerHTML = `<i class="fa-solid fa-bolt"></i> ${label}`;
             transcriptDurationBadge.className = 'badge-duration valid';
             return;
@@ -454,19 +454,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const typedStartSec = transcriptStartInput.value.trim() ? Math.floor(parseTimestampToSeconds(transcriptStartInput.value)) : 0;
         const baseStartSec = playerSec > 0 ? playerSec : typedStartSec;
 
-        if (preset === 'auto') {
-            transcriptStartInput.value = '';
-            transcriptEndInput.value = '';
-            manualStartEditActive = true;
-        } else if (preset === '5m') {
+        if (preset === '30s') {
             transcriptStartInput.value = formatSecondsToHHMMSS(baseStartSec);
-            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 300);
-        } else if (preset === '15m') {
+            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 30);
+        } else if (preset === '1m' || preset === 'auto') {
             transcriptStartInput.value = formatSecondsToHHMMSS(baseStartSec);
-            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 900);
-        } else if (preset === '30m') {
+            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 60);
+        } else if (preset === '2m') {
             transcriptStartInput.value = formatSecondsToHHMMSS(baseStartSec);
-            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 1800);
+            transcriptEndInput.value = formatSecondsToHHMMSS(baseStartSec + 120);
         } else if (preset === 'full') {
             transcriptStartInput.value = baseStartSec > 0 ? formatSecondsToHHMMSS(baseStartSec) : '';
             transcriptEndInput.value = 'Full';
@@ -2208,8 +2204,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const prevEndStr = transcriptEndInput.value.trim();
             const prevEndLow = prevEndStr.toLowerCase();
 
-            // Preserve the user's chosen duration window (e.g. 5m, 15m, 30m) or default to 5m when sliding End Time
-            let windowSec = 300;
+            // Preserve the user's chosen duration window (e.g. 30s, 1m, 2m) or default to 60s when sliding End Time
+            let windowSec = 60;
             if (prevEndStr && prevEndLow !== 'full') {
                 const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
                 const prevE = parseTimestampToSeconds(prevEndStr);

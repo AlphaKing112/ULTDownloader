@@ -1011,10 +1011,10 @@ def main():
             end_time = args.end.strip()
             is_full = args.full or end_time.lower() in ("full", "all", "inf")
 
-            # Cap long VODs or Render YouTube runs to first 5 minutes when no explicit range or Full flag is set
+            # Cap long VODs or Render YouTube runs to first 60 seconds when no explicit range or Full flag is set
             if (is_vod or (is_render_host and is_yt)) and not start_time and (not end_time or not is_full):
                 start_time = "00:00:00"
-                end_time = "00:05:00"
+                end_time = "00:01:00"
                 auto_capped = True
 
             wav_path, start_offset_sec, cookies_rejected, dl_err = download_audio_to_wav(
@@ -1055,7 +1055,7 @@ def main():
 
         notice = None
         if auto_capped:
-            notice = "Transcribed the first 5 minutes for fast AI + speaker analysis. Pick 15m, 30m, a custom range, or Full Stream for longer sections."
+            notice = "Transcribed the first 60 seconds for fast AI + speaker analysis. Pick 30s, 1m, 2m, a custom range, or Full Stream for other sections."
 
         print(json.dumps({
             "success": True,
