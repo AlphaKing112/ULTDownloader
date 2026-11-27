@@ -28,7 +28,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=4.2">
+    <link rel="stylesheet" href="style.css?v=4.3">
 </head>
 <body>
     <div class="app-container">
@@ -801,10 +801,17 @@
                             <i class="fa-solid fa-stopwatch text-purple"></i>
                             <span class="player-time-label">Position:</span>
                             <span class="player-time-badge" id="player-live-time-display">00:00:00</span>
-                            <label class="player-autosync-toggle" title="Automatically set Start Time to your current player position as you browse or scrub the video">
-                                <input type="checkbox" id="player-auto-sync-start" checked>
-                                <span>Auto Start</span>
-                            </label>
+                            <div class="player-autosync-group" id="player-autosync-group" title="Choose whether browsing/scrubbing the video updates Start Time or End Time">
+                                <button type="button" class="player-sync-pill sync-start active" data-sync="start" onclick="setPlayerBrowseSyncMode('start')" title="Browsing/scrubbing updates Start Time">
+                                    <i class="fa-solid fa-play"></i> Auto Start
+                                </button>
+                                <button type="button" class="player-sync-pill sync-end" data-sync="end" onclick="setPlayerBrowseSyncMode('end')" title="Browsing/scrubbing updates End Time">
+                                    <i class="fa-solid fa-stop"></i> Auto End
+                                </button>
+                                <button type="button" class="player-sync-pill sync-off" data-sync="off" onclick="setPlayerBrowseSyncMode('off')" title="Pause automatic time syncing while browsing">
+                                    Off
+                                </button>
+                            </div>
                         </div>
                         <div class="player-toolbar-buttons">
                             <button type="button" class="btn btn-primary btn-sm btn-capture-thumb" id="btn-player-capture-thumb" onclick="captureThumbnailFromPlayer()" title="Grab frame at current player position (or Default Cover at 00:00:00)">
@@ -1106,6 +1113,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-    <script src="app.js?v=4.7"></script>
+    <script src="app.js?v=4.8"></script>
 </body>
 </html>

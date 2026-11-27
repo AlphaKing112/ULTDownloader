@@ -313,7 +313,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     if (sectionEndInput) {
-        sectionEndInput.addEventListener('input', () => {
+        sectionEndInput.addEventListener('input', (e) => {
+            if (e && e.isTrusted) manualStartEditActive = true;
             updateSectionDurationDisplay();
             updateGeneratedCommand();
         });
@@ -495,7 +496,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     if (transcriptEndInput) {
-        transcriptEndInput.addEventListener('input', () => {
+        transcriptEndInput.addEventListener('input', (e) => {
+            if (e && e.isTrusted) manualStartEditActive = true;
             document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
             updateTranscriptDurationDisplay();
             updateGeneratedCommand();
@@ -2165,22 +2167,47 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 250);
     };
 
-    // Auto-Sync Start Time when browsing / scrubbing the embedded player
+    // Auto-Sync Start or End Time when browsing / scrubbing the embedded player
+    let playerBrowseSyncMode = 'start'; // 'start' | 'end' | 'off'
     let lastTickerPlayerSec = 0;
     let lastAppliedAutoStartSec = -1;
     let manualStartEditActive = false;
     let suppressAutoSyncUntil = 0;
 
+    window.setPlayerBrowseSyncMode = function(mode) {
+        playerBrowseSyncMode = ['start', 'end', 'off'].includes(mode) ? mode : 'start';
+        document.querySelectorAll('#player-autosync-group .player-sync-pill').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.sync === playerBrowseSyncMode);
+        });
+        manualStartEditActive = false;
+        lastAppliedAutoStartSec = -1;
+
+        // If user switches to Auto Start or Auto End while paused at a valid player spot, apply immediately when sensible
+        if (playerBrowseSyncMode !== 'off') {
+            const curSec = Math.floor(getPlayerCurrentTime() || 0);
+            if (curSec > 0) {
+                if (playerBrowseSyncMode === 'end') {
+                    const startInput = activeTabId === 'tab-yt-tags' ? transcriptStartInput : sectionStartInput;
+                    const curStartSec = startInput ? Math.floor(parseTimestampToSeconds(startInput.value)) : 0;
+                    if (curSec > curStartSec) {
+                        syncStartTimeFromPlayer(curSec, { isExplicitSeek: true });
+                    }
+                } else {
+                    syncStartTimeFromPlayer(curSec, { isExplicitSeek: true });
+                }
+            }
+        }
+    };
+
     function syncStartTimeFromPlayer(rawSec, { isExplicitSeek = false } = {}) {
-        const autoSyncCheckbox = document.getElementById('player-auto-sync-start');
-        if (autoSyncCheckbox && !autoSyncCheckbox.checked) return;
+        if (playerBrowseSyncMode === 'off') return;
         if (clipPreviewLoopTimer) return;
         if (Date.now() < suppressAutoSyncUntil) return;
 
         const sec = Math.floor(Number(rawSec) || 0);
         if (sec <= 0) return;
 
-        // If user manually typed a start time, pause passive playback syncing until they scrub/seek again
+        // If user manually typed a start/end time, pause passive playback syncing until they scrub/seek again
         if (isExplicitSeek) {
             manualStartEditActive = false;
         } else if (manualStartEditActive) {
@@ -2200,40 +2227,49 @@ document.addEventListener('DOMContentLoaded', () => {
             const mode = document.querySelector('input[name="analysis-mode"]:checked')?.value || 'tags';
             if (mode !== 'transcript') return;
 
-            const prevStartStr = transcriptStartInput.value.trim();
-            const prevEndStr = transcriptEndInput.value.trim();
-            const prevEndLow = prevEndStr.toLowerCase();
+            if (playerBrowseSyncMode === 'end') {
+                transcriptEndInput.value = formatted;
+                document.querySelectorAll('.transcript-preset-pill').forEach(p => p.classList.remove('active'));
+            } else {
+                const prevStartStr = transcriptStartInput.value.trim();
+                const prevEndStr = transcriptEndInput.value.trim();
+                const prevEndLow = prevEndStr.toLowerCase();
 
-            // Preserve the user's chosen duration window (e.g. 30s, 1m, 2m) or default to 60s when sliding End Time
-            let windowSec = 60;
-            if (prevEndStr && prevEndLow !== 'full') {
-                const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
-                const prevE = parseTimestampToSeconds(prevEndStr);
-                if (prevE > prevS) windowSec = prevE - prevS;
-            }
+                // Preserve the user's chosen duration window (e.g. 30s, 1m, 2m) or default to 60s when sliding End Time
+                let windowSec = 60;
+                if (prevEndStr && prevEndLow !== 'full') {
+                    const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
+                    const prevE = parseTimestampToSeconds(prevEndStr);
+                    if (prevE > prevS) windowSec = prevE - prevS;
+                }
 
-            transcriptStartInput.value = formatted;
-            if (prevEndLow !== 'full') {
-                const curEndSec = prevEndStr ? parseTimestampToSeconds(prevEndStr) : 0;
-                if (!prevEndStr || curEndSec <= sec || isExplicitSeek) {
-                    transcriptEndInput.value = formatSecondsToHHMMSS(sec + windowSec);
+                transcriptStartInput.value = formatted;
+                if (prevEndLow !== 'full') {
+                    const curEndSec = prevEndStr ? parseTimestampToSeconds(prevEndStr) : 0;
+                    if (!prevEndStr || curEndSec <= sec || isExplicitSeek) {
+                        transcriptEndInput.value = formatSecondsToHHMMSS(sec + windowSec);
+                    }
                 }
             }
             updateTranscriptDurationDisplay();
             updateGeneratedCommand();
         } else if (activeTabId === 'tab-section-clipper' && sectionStartInput && sectionEndInput) {
-            const prevStartStr = sectionStartInput.value.trim();
-            const prevEndStr = sectionEndInput.value.trim();
-            let windowSec = 60;
-            if (prevEndStr) {
-                const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
-                const prevE = parseTimestampToSeconds(prevEndStr);
-                if (prevE > prevS) windowSec = prevE - prevS;
-            }
-            sectionStartInput.value = formatted;
-            const curEndSec = prevEndStr ? parseTimestampToSeconds(prevEndStr) : 0;
-            if (!prevEndStr || curEndSec <= sec) {
-                sectionEndInput.value = formatSecondsToHHMMSS(sec + windowSec);
+            if (playerBrowseSyncMode === 'end') {
+                sectionEndInput.value = formatted;
+            } else {
+                const prevStartStr = sectionStartInput.value.trim();
+                const prevEndStr = sectionEndInput.value.trim();
+                let windowSec = 60;
+                if (prevEndStr) {
+                    const prevS = parseTimestampToSeconds(prevStartStr || '00:00:00');
+                    const prevE = parseTimestampToSeconds(prevEndStr);
+                    if (prevE > prevS) windowSec = prevE - prevS;
+                }
+                sectionStartInput.value = formatted;
+                const curEndSec = prevEndStr ? parseTimestampToSeconds(prevEndStr) : 0;
+                if (!prevEndStr || curEndSec <= sec) {
+                    sectionEndInput.value = formatSecondsToHHMMSS(sec + windowSec);
+                }
             }
             updateSectionDurationDisplay();
             updateGeneratedCommand();
